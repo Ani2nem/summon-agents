@@ -1,0 +1,17 @@
+{
+  "name": "summon-agents",
+  "version": "0.0.0",
+  "type": "module",
+  "bin": {
+    "summon-agents": "./dist/index.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup"
+  },
+  "dependencies": {
+    "@summon-agents/core": "workspace:*",
+    "commander": "^12.1.0",
+    "zod": "^3.24.1"
+  }
+}

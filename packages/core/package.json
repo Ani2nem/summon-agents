@@ -1,0 +1,23 @@
+{
+  "name": "@summon-agents/core",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.3",
+    "execa": "^9.5.2",
+    "pino": "^9.5.0",
+    "zod": "^3.24.1"
+  }
+}

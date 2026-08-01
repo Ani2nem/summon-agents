@@ -1,0 +1,17 @@
+{
+  "name": "summon-agents-mcp",
+  "version": "0.0.0",
+  "type": "module",
+  "bin": {
+    "summon-agents-mcp": "./dist/index.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@summon-agents/core": "workspace:*",
+    "zod": "^3.24.1"
+  }
+}
