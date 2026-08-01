@@ -1,14 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { detectHotspots, isHotspot, isLockfile } from "./hotspots.js";
+import {
+  detectHotspots,
+  isHotspot,
+  isLockfile,
+  isMechanicalHotspot,
+} from "./hotspots.js";
 
 describe("hotspots", () => {
-  it("matches known manifests, lockfiles, schemas, and migration dirs", () => {
+  it("matches known manifests and lockfiles", () => {
     expect(isHotspot("package.json")).toBe(true);
     expect(isHotspot("apps/web/package.json")).toBe(true);
     expect(isHotspot("pnpm-lock.yaml")).toBe(true);
-    expect(isHotspot("prisma/schema.prisma")).toBe(true);
-    expect(isHotspot("db/migrations/0001_init.sql")).toBe(true);
-    expect(isHotspot("src/index.ts")).toBe(true); // barrel
+  });
+
+  it("does NOT flag entry points / barrels as hotspots (they need real edits)", () => {
+    // Reserving these out of every lane silently dropped wiring work.
+    expect(isHotspot("src/index.ts")).toBe(false);
+    expect(isHotspot("src/index.js")).toBe(false);
+  });
+
+  it("classifies mechanical vs code hotspots", () => {
+    expect(isMechanicalHotspot("package.json")).toBe(true);
+    expect(isMechanicalHotspot("pnpm-lock.yaml")).toBe(true);
+    expect(isMechanicalHotspot("go.mod")).toBe(true);
+    // A shared code file is NOT mechanical - it needs an owner, not regeneration.
+    expect(isMechanicalHotspot("src/index.js")).toBe(false);
+    expect(isMechanicalHotspot("src/types.ts")).toBe(false);
   });
 
   it("does not flag ordinary source files", () => {

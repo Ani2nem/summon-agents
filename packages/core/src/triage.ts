@@ -5,7 +5,7 @@
 // brake (coerce to a single agent when the work is not cleanly splittable), and
 // fall back to single-agent on any judge failure rather than forking blindly.
 
-import { detectHotspots, isHotspot } from "./hotspots.js";
+import { detectHotspots, isMechanicalHotspot } from "./hotspots.js";
 import { laneOverlaps } from "./decompose.js";
 import {
   type Judge,
@@ -47,27 +47,64 @@ export function dedupeSlugs(subtasks: Subtask[]): Subtask[] {
 }
 
 /**
- * Reserve hotspot files out of the parallel lanes: strip any hotspot entries
- * from each subtask's allow-list and collect them into decision.hotspotFiles
- * (union of pattern-detected and Judge-declared hotspots).
+ * Handle hotspot files. Two kinds, treated very differently:
+ *
+ *  - MECHANICAL hotspots (manifests, lockfiles): reserved out of every lane and
+ *    regenerated centrally. These never need hand-editing.
+ *  - CODE hotspots (a shared entry point, barrel, router, types file that needs
+ *    real edits): these must NOT be dropped. They are assigned to exactly ONE
+ *    lane, which also receives the full plan for wiring context. This fixes the
+ *    class of bug where "wire modules into index.js" silently vanished because
+ *    index.js was reserved out of all lanes.
+ *
+ * `plan` is the full approved plan, appended to the owning lane so it has the
+ * cross-cutting context needed to do the wiring.
  */
-export function reserveHotspots(decision: TriageDecision): TriageDecision {
+export function reserveHotspots(
+  decision: TriageDecision,
+  plan = "",
+): TriageDecision {
   const allFiles = decision.subtasks.flatMap((s) => s.allowedFiles);
-  const explicit = decision.hotspotFiles.map(normalize);
-  const detected = detectHotspots(allFiles);
-  const hotspotSet = new Set<string>([...explicit, ...detected]);
+  const flagged = new Set<string>([
+    ...decision.hotspotFiles.map(normalize),
+    ...detectHotspots(allFiles),
+  ]);
+  const mechanical = [...flagged].filter(isMechanicalHotspot);
+  const codeHotspots = [...flagged].filter((f) => !isMechanicalHotspot(f));
 
-  const subtasks = decision.subtasks.map((s) => ({
+  // Strip only mechanical hotspots from every lane.
+  const mechanicalSet = new Set(mechanical);
+  let subtasks = decision.subtasks.map((s) => ({
     ...s,
-    allowedFiles: s.allowedFiles.filter(
-      (f) => !isHotspot(f) && !hotspotSet.has(normalize(f)),
-    ),
+    allowedFiles: s.allowedFiles.filter((f) => !mechanicalSet.has(normalize(f))),
   }));
+
+  // Assign code hotspots to a single owning lane so the wiring gets done.
+  if (codeHotspots.length > 0 && subtasks.length > 0) {
+    const owner = subtasks[0]!;
+    const allowedFiles = [
+      ...new Set([...owner.allowedFiles, ...codeHotspots]),
+    ];
+    const note = `
+
+## Shared files you also own (wiring)
+You must make the changes described in the plan to these shared files:
+${codeHotspots.map((f) => `- ${f}`).join("\n")}
+Some modules referenced here are being created by other agents in parallel and
+will exist only after merge. Write imports/wiring exactly as the plan specifies.
+Do NOT create files owned by other tasks - only import them.
+
+## Full plan (for wiring context)
+${plan}`;
+    subtasks = subtasks.map((s, i) =>
+      i === 0 ? { ...owner, allowedFiles, instructions: owner.instructions + note } : s,
+    );
+  }
 
   return {
     ...decision,
     subtasks,
-    hotspotFiles: [...hotspotSet].sort(),
+    hotspotFiles: mechanical.sort(),
   };
 }
 
@@ -92,7 +129,7 @@ export function normalizeDecision(
     return singleDecision(plan, parsed.reason || "not worth splitting");
   }
 
-  const reserved = reserveHotspots({ ...parsed, subtasks });
+  const reserved = reserveHotspots({ ...parsed, subtasks }, plan);
 
   const overlaps = laneOverlaps(reserved.subtasks);
   if (overlaps.length > 0) {

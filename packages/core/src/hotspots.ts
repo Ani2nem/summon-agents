@@ -17,21 +17,19 @@ import * as path from "node:path";
  *  - extension glob:  "*.prisma"
  *  - path segment:    "migrations/" (matches if any dir segment equals it)
  */
+// NOTE: only files that need NO hand-editing belong here - manifests and
+// lockfiles that are regenerated/handled centrally. Do NOT list entry points or
+// barrels (index.js/index.ts): those often need REAL edits (wiring), and
+// reserving them out of every lane silently drops that work. Shared code files
+// are instead assigned to a lane (see triage.reserveHotspots).
 export const DEFAULT_HOTSPOT_PATTERNS: readonly string[] = [
-  // JS/TS
+  // JS/TS manifests + lockfiles
   "package.json",
   "package-lock.json",
   "pnpm-lock.yaml",
   "yarn.lock",
   "tsconfig.json",
   "tsconfig.base.json",
-  // Barrel exports are a classic collision point.
-  "index.ts",
-  "index.js",
-  // Prisma / SQL migrations
-  "*.prisma",
-  "schema.prisma",
-  "migrations/",
   // Go
   "go.mod",
   "go.sum",
@@ -48,6 +46,30 @@ export const DEFAULT_HOTSPOT_PATTERNS: readonly string[] = [
   "Gemfile",
   "Gemfile.lock",
 ];
+
+/** Manifest basenames (dependency/build config). Combined with lockfiles, these
+ *  are the "mechanical" hotspots that are reserved + regenerated, never edited. */
+export const MANIFEST_BASENAMES: readonly string[] = [
+  "package.json",
+  "tsconfig.json",
+  "tsconfig.base.json",
+  "go.mod",
+  "Cargo.toml",
+  "requirements.txt",
+  "pyproject.toml",
+  "Pipfile",
+  "Gemfile",
+];
+
+/**
+ * True if `file` is a mechanical hotspot (manifest or lockfile): reserved out of
+ * lanes and regenerated centrally, never hand-edited. Everything else the Judge
+ * flags as a hotspot is treated as a shared CODE file that needs an owner.
+ */
+export function isMechanicalHotspot(file: string): boolean {
+  const base = path.posix.basename(normalize(file));
+  return isLockfile(file) || MANIFEST_BASENAMES.includes(base);
+}
 
 /** Lockfiles that must be regenerated post-merge rather than git-merged. */
 export const LOCKFILE_BASENAMES: readonly string[] = [

@@ -29,7 +29,7 @@ const split = (
 });
 
 describe("reserveHotspots", () => {
-  it("strips hotspot entries from lanes and collects them", () => {
+  it("strips mechanical hotspot entries from lanes and collects them", () => {
     const decision = split([
       {
         slug: "auth",
@@ -49,6 +49,25 @@ describe("reserveHotspots", () => {
     expect(reserved.subtasks[1]!.allowedFiles).toEqual(["src/api/**"]);
     expect(reserved.hotspotFiles).toContain("package.json");
     expect(reserved.hotspotFiles).toContain("pnpm-lock.yaml");
+  });
+
+  it("assigns a code hotspot (index.js wiring) to ONE lane instead of dropping it", () => {
+    const decision = split(
+      [
+        { slug: "greeting", title: "g", instructions: "build greeting", allowedFiles: ["src/greeting.js"] },
+        { slug: "farewell", title: "f", instructions: "build farewell", allowedFiles: ["src/farewell.js"] },
+      ],
+      { hotspotFiles: ["src/index.js", "package.json"] },
+    );
+    const reserved = reserveHotspots(decision, "THE FULL PLAN");
+
+    // package.json is mechanical (reserved); src/index.js is code (assigned).
+    expect(reserved.hotspotFiles).toEqual(["package.json"]);
+    const owners = reserved.subtasks.filter((s) =>
+      s.allowedFiles.includes("src/index.js"),
+    );
+    expect(owners).toHaveLength(1); // owned by exactly one lane, not dropped
+    expect(reserved.subtasks[0]!.instructions).toContain("THE FULL PLAN");
   });
 });
 
@@ -97,6 +116,22 @@ describe("normalizeDecision (the brake)", () => {
     expect(d.mode).toBe("single");
     expect(d.reason).toMatch(/overlap/i);
     expect(d.subtasks[0]!.instructions).toBe("PLAN");
+  });
+
+  it("keeps wiring owned end-to-end: a split with index.js in hotspots does not drop it", () => {
+    const d = normalizeDecision(
+      split(
+        [
+          { slug: "greeting", title: "g", instructions: "build greeting", allowedFiles: ["src/greeting.js"] },
+          { slug: "farewell", title: "f", instructions: "build farewell", allowedFiles: ["src/farewell.js"] },
+        ],
+        { hotspotFiles: ["src/index.js"] },
+      ),
+      "PLAN",
+    );
+    expect(d.mode).toBe("split");
+    const owned = d.subtasks.some((s) => s.allowedFiles.includes("src/index.js"));
+    expect(owned).toBe(true);
   });
 
   it("does NOT collapse a split just because lanes share a hotspot", () => {
