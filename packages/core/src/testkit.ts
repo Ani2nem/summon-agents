@@ -13,6 +13,8 @@ export async function makeTempRepo(): Promise<string> {
   await git(dir, ["config", "user.email", "test@summon.dev"]);
   await git(dir, ["config", "user.name", "Summon Test"]);
   await fs.writeFile(path.join(dir, "README.md"), "# temp repo\n");
+  // Mirror the real project: summon-agents' own state dir is never tracked.
+  await fs.writeFile(path.join(dir, ".gitignore"), ".summon-agents/\n");
   await git(dir, ["add", "-A"]);
   await git(dir, ["commit", "-m", "baseline"]);
   return dir;
