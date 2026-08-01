@@ -175,6 +175,44 @@ describe("runPipeline (end to end with fakes)", () => {
     expect(result.reason).toMatch(/already active/i);
   });
 
+  it("out-of-lane backstop: flags an agent that edits outside its lane and does not merge", async () => {
+    // The "auth" agent writes into src/api (the other lane) - a violation.
+    const strayRunner = new ExecAgentRunner(({ subtask }) => ({
+      command: process.execPath,
+      args: [
+        "-e",
+        subtask.slug === "auth"
+          ? `const fs=require("fs");fs.mkdirSync("src/api",{recursive:true});fs.writeFileSync("src/api/sneak.ts","x");fs.mkdirSync("src/auth",{recursive:true});fs.writeFileSync("src/auth/index.ts","x");`
+          : `const fs=require("fs");fs.mkdirSync("src/api",{recursive:true});fs.writeFileSync("src/api/index.ts","x");`,
+      ],
+    }));
+
+    const result = await runPipeline(
+      repo,
+      "Build auth and api",
+      {
+        judge: splittingJudge(split2),
+        runner: strayRunner,
+        vcs: noRemoteVcs,
+        notifier: silentNotifier(),
+      },
+      { runId: "pipe-stray", watch: { intervalMs: 50 } },
+    );
+
+    expect(result.status).toBe("needsHuman");
+    expect(result.reason).toMatch(/out-of-lane/i);
+
+    // Nothing merged onto base.
+    const { git } = await import("./worktree.js");
+    await git(repo, ["checkout", "main"]);
+    expect(
+      await fs
+        .access(path.join(repo, "src/api/sneak.ts"))
+        .then(() => true)
+        .catch(() => false),
+    ).toBe(false);
+  });
+
   it("brake: a single-mode decision runs one agent (no fan-out)", async () => {
     const single: TriageDecision = {
       mode: "single",

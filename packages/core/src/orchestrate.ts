@@ -6,7 +6,9 @@
 // function runs under the CLI (claude Judge), MCP (host model Judge), and tests.
 
 import { dispatchDecision, awaitRun, type WatchOptions } from "./dispatch.js";
+import { outOfLaneFiles } from "./decompose.js";
 import {
+  commitAll,
   commitTracked,
   detectRunCommand,
   runMerge,
@@ -31,7 +33,7 @@ import {
   setRunStatus,
 } from "./run.js";
 import { runTriage } from "./triage.js";
-import { deleteBranch, git } from "./worktree.js";
+import { changedFilesVsBase, deleteBranch, git } from "./worktree.js";
 
 export interface PipelineResult {
   status: "skipped" | "completed" | "needsHuman";
@@ -133,6 +135,37 @@ export async function runPipeline(
         reason: `${failed.length} agent(s) did not finish cleanly: ${failed
           .map((f) => f.slug)
           .join(", ")}`,
+        decision,
+      };
+    }
+
+    // Out-of-lane backstop (loophole C): commit each agent's work, then verify it
+    // only touched files in its declared lane. An agent that wandered outside its
+    // lane - or clobbered a reserved manifest - is flagged before we merge.
+    const bySlug = new Map(decision.subtasks.map((s) => [s.slug, s]));
+    const violations: string[] = [];
+    for (const record of records) {
+      await commitAll(record.worktree, `summon: ${record.slug} work`).catch(
+        () => false,
+      );
+      const subtask = bySlug.get(record.slug);
+      if (!subtask) continue;
+      const changed = await changedFilesVsBase(
+        repoRoot,
+        baseBranch,
+        record.branch,
+      );
+      const stray = outOfLaneFiles(subtask, changed);
+      if (stray.length > 0) {
+        violations.push(`${record.slug} edited outside its lane: ${stray.join(", ")}`);
+      }
+    }
+    if (violations.length > 0) {
+      state = await setRunStatus({ repoRoot, state, status: "needsHuman" });
+      return {
+        status: "needsHuman",
+        runId,
+        reason: `out-of-lane edits detected; not merging: ${violations.join("; ")}`,
         decision,
       };
     }

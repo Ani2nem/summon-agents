@@ -6,7 +6,6 @@
 // runs (loophole C backstop, before merge).
 
 import * as path from "node:path";
-import { isHotspot } from "./hotspots.js";
 import type { Subtask } from "./ports.js";
 
 function normalize(file: string): string {
@@ -62,24 +61,21 @@ export function fileAllowed(
 }
 
 /**
- * Files an agent changed that fall outside its declared allow-list. Hotspot
- * files are excluded here because they are handled by the sequential/reservation
- * path, not the per-lane contract. If the subtask declared no allow-list, we
- * cannot judge and return nothing (avoid false positives).
+ * Files an agent changed that fall outside its declared allow-list. The lane's
+ * allow-list already includes any code-hotspot files assigned to it, and
+ * reserved mechanical hotspots (manifests/lockfiles) are handled centrally - so
+ * an agent touching anything not in its allow-list is a genuine violation
+ * (loophole C backstop). If the subtask declared no allow-list (single-agent
+ * mode owns the whole plan), we cannot judge and return nothing.
  */
 export function outOfLaneFiles(
   subtask: Subtask,
   changedFiles: readonly string[],
-  hotspotPatterns?: readonly string[],
 ): string[] {
   if (subtask.allowedFiles.length === 0) return [];
   return changedFiles
     .map(normalize)
-    .filter(
-      (f) =>
-        !fileAllowed(f, subtask.allowedFiles) &&
-        !isHotspot(f, hotspotPatterns),
-    );
+    .filter((f) => !fileAllowed(f, subtask.allowedFiles));
 }
 
 export interface LaneOverlap {

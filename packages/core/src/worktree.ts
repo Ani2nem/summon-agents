@@ -155,6 +155,24 @@ export async function pruneWorktrees(repoDir: string): Promise<void> {
   await git(repoDir, ["worktree", "prune"]);
 }
 
+/**
+ * Files a branch changed relative to where it forked from base
+ * (`git diff --name-only base...branch`). Authoritative even when the agent
+ * committed its work (unlike a working-tree status check).
+ */
+export async function changedFilesVsBase(
+  repoDir: string,
+  baseBranch: string,
+  branch: string,
+): Promise<string[]> {
+  const out = await git(repoDir, [
+    "diff",
+    "--name-only",
+    `${baseBranch}...${branch}`,
+  ]);
+  return out.split("\n").filter(Boolean);
+}
+
 /** Delete a local branch. `force` uses -D. No-op if the branch is gone. */
 export async function deleteBranch(input: {
   repoDir: string;

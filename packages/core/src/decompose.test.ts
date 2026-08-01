@@ -35,14 +35,22 @@ describe("fileAllowed", () => {
 });
 
 describe("outOfLaneFiles (loophole C backstop)", () => {
-  it("flags edits outside the declared lane, ignoring hotspots", () => {
+  it("flags any edit outside the declared lane, including reserved manifests", () => {
     const s = sub("auth", ["src/auth/**"]);
     const changed = [
       "src/auth/login.ts", // in lane
       "src/api/routes.ts", // OUT of lane
-      "package.json", // hotspot - ignored here
+      "package.json", // reserved manifest - agents must not touch it
     ];
-    expect(outOfLaneFiles(s, changed)).toEqual(["src/api/routes.ts"]);
+    expect(outOfLaneFiles(s, changed).sort()).toEqual([
+      "package.json",
+      "src/api/routes.ts",
+    ]);
+  });
+
+  it("does not flag a code-hotspot file that was assigned to the lane", () => {
+    const s = sub("greeting", ["src/greeting.js", "src/index.js"]);
+    expect(outOfLaneFiles(s, ["src/greeting.js", "src/index.js"])).toEqual([]);
   });
 
   it("returns nothing when the lane is undeclared (avoid false positives)", () => {
