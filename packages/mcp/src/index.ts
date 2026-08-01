@@ -1,4 +1,9 @@
-// summon-agents-mcp stdio server entry. Wired up in the MCP task (M2).
-import { VERSION } from "@summon-agents/core";
+// summon-agents-mcp - stdio MCP server entry.
+// Registered in a host's MCP config (e.g. .mcp.json) and launched by the host.
 
-console.error(`summon-agents-mcp ${VERSION} (not yet implemented)`);
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { createServer } from "./server.js";
+
+const server = createServer();
+const transport = new StdioServerTransport();
+await server.connect(transport);

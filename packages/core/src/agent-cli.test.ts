@@ -3,7 +3,7 @@ import {
   agentConfigFromEnv,
   claudeCommandBuilder,
   parseTriageResponse,
-} from "./claude.js";
+} from "./agent-cli.js";
 
 describe("agentConfigFromEnv", () => {
   it("defaults to unattended (bypassPermissions)", () => {
