@@ -14,25 +14,19 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-/** Where the host agent stages the plan before invoking the CLI (gitignored). */
-export const PLAN_STAGE_PATH = ".summon-agents/current-plan.md";
-
-/** The invocation the trigger tells the agent to run. */
-export const RUN_COMMAND = `npx -y summon-agents run --plan ${PLAN_STAGE_PATH}`;
-
 /**
  * The shared instruction body, vendor-agnostic. Every host's trigger file wraps
- * this in its own frontmatter/format. It must (1) stage the plan, (2) run the
- * CLI, and (3) forbid implementing inline (which is what raced summon-agents in
- * the live test).
+ * this in its own frontmatter/format. It drives the summon_agents MCP tool
+ * (registered by this same init), which works uniformly across Claude Code,
+ * Cursor, and Copilot - and forbids implementing inline (which is what raced
+ * summon-agents in the live test).
  */
 export const TRIGGER_BODY = `The user wants to execute the current approved implementation plan using summon-agents - parallel, isolated agents - and NOT by implementing it yourself.
 
 Do exactly this:
-1. Write the full text of the most recently approved plan to \`${PLAN_STAGE_PATH}\` (create the \`.summon-agents/\` directory if needed). If no plan has been approved yet, stop and ask the user to plan first.
-2. Run this command and stream its output to the user:
-   \`${RUN_COMMAND}\`
-3. Do NOT implement the plan yourself, and do NOT edit project files. summon-agents creates an isolated git worktree per task, runs an agent in each, merges them back locally (gated on a clean, validated merge), and opens a PR (or prints a manual PR command if there is no remote). Relay its final report to the user verbatim.`;
+1. Call the \`summon_agents\` tool (provided by the summon-agents MCP server), passing the full text of the most recently approved plan as the \`plan\` argument. If no plan has been approved yet, stop and ask the user to plan first.
+2. Do NOT implement the plan yourself, and do NOT edit project files. summon_agents creates an isolated git worktree per task, runs an agent in each, merges them back locally (gated on a clean, validated merge), and opens a PR (or reports a manual PR command if there is no remote).
+3. Relay the tool's final report to the user verbatim.`;
 
 export interface HostFile {
   path: string;

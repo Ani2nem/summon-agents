@@ -3,7 +3,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  RUN_COMMAND,
   TRIGGER_BODY,
   claudeCommandFile,
   copilotPromptFile,
@@ -12,9 +11,9 @@ import {
 } from "./init.js";
 
 describe("shared trigger body (vendor-agnostic)", () => {
-  it("stages the plan, runs the CLI, and forbids inline implementation", () => {
-    expect(TRIGGER_BODY).toContain(".summon-agents/current-plan.md");
-    expect(TRIGGER_BODY).toContain(RUN_COMMAND);
+  it("drives the summon_agents MCP tool and forbids inline implementation", () => {
+    expect(TRIGGER_BODY).toContain("summon_agents");
+    expect(TRIGGER_BODY).toMatch(/plan.*argument/i);
     expect(TRIGGER_BODY).toMatch(/do not implement the plan yourself/i);
   });
 
@@ -54,7 +53,7 @@ describe("runInit (claude-code)", () => {
       "utf8",
     );
     expect(cmd).toContain("Dispatch the approved plan");
-    expect(cmd).toContain(RUN_COMMAND);
+    expect(cmd).toContain("summon_agents");
 
     const mcp = JSON.parse(
       await fs.readFile(path.join(dir, ".mcp.json"), "utf8"),
