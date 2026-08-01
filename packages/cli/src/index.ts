@@ -131,8 +131,8 @@ program
 
 program
   .command("init")
-  .description("Install the editor hook + MCP registration for this project")
-  .option("--host <host>", "claude-code (default)", "claude-code")
+  .description("Install the /summon-agents trigger + MCP registration")
+  .option("--host <host>", "claude-code | cursor | copilot", "claude-code")
   .action(async (opts) => {
     const { runInit } = await import("./init.js");
     await runInit(process.cwd(), opts.host);
