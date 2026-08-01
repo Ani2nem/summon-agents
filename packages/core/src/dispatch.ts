@@ -237,8 +237,10 @@ export async function dispatchDecision(input: {
 
     await addWorktree({ repoDir: repoRoot, worktreePath: worktreeDir, branch, baseBranch });
     await fs.mkdir(rDir, { recursive: true });
+    // INSTRUCTIONS.md lives in the run dir, NOT the worktree: if it were in the
+    // worktree it would be committed and collide across branches on merge.
     await fs.writeFile(
-      path.join(worktreeDir, "INSTRUCTIONS.md"),
+      path.join(rDir, "INSTRUCTIONS.md"),
       renderInstructions(subtask, decision.hotspotFiles),
     );
 

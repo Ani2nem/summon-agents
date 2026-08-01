@@ -93,6 +93,25 @@ export interface ValidationResult {
   output?: string;
 }
 
+/**
+ * Install dependencies once, up front, before dispatch (loophole C). Doing this
+ * centrally keeps agents from each racing to edit the manifest/lockfile.
+ */
+export async function installDependencies(
+  repoDir: string,
+  deps: readonly string[],
+): Promise<{ ok: boolean; output: string }> {
+  if (deps.length === 0) return { ok: true, output: "" };
+  const pm = await detectPackageManager(repoDir);
+  const verb = pm === "npm" ? "install" : "add";
+  const res = await execa(pm, [verb, ...deps], {
+    cwd: repoDir,
+    reject: false,
+    all: true,
+  });
+  return { ok: res.exitCode === 0, output: res.all ?? "" };
+}
+
 /** Run a validation command in the merged tree, capturing combined output. */
 export async function runValidation(
   repoDir: string,

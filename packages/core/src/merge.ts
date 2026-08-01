@@ -37,7 +37,7 @@ export function integrationBranchName(runId: string): string {
 }
 
 /** Stage everything and commit if there is anything to commit. */
-async function commitAll(
+export async function commitAll(
   repoDir: string,
   message: string,
 ): Promise<boolean> {

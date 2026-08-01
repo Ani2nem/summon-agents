@@ -13,6 +13,7 @@ import {
   RunStateSchema,
   type RunStatus,
   isTerminal,
+  triggersCleanup,
 } from "./ports.js";
 import {
   deleteBranch,
@@ -208,7 +209,7 @@ export async function setRunStatus(input: {
 }): Promise<RunState> {
   const next: RunState = { ...input.state, status: input.status };
   await saveRun(input.repoRoot, next);
-  if (isTerminal(input.status)) {
+  if (triggersCleanup(input.status)) {
     await cleanupRun({ repoRoot: input.repoRoot, state: next });
   }
   return next;
@@ -238,6 +239,11 @@ export async function cleanupRun(input: {
       branch: branchNameFor(state.runId, slug),
     });
   }
+  // The local integration branch (its commits are on base / pushed for the PR).
+  await deleteBranch({
+    repoDir: repoRoot,
+    branch: `summon/${state.runId}/integration`,
+  });
   await pruneWorktrees(repoRoot);
   // Remove the (now empty) per-run worktree directory if present.
   await fs.rm(path.join(worktreesRoot(repoRoot), state.runId), {
@@ -295,18 +301,24 @@ export async function gc(repoRoot: string): Promise<{
   return { worktreesRemoved, branchesDeleted };
 }
 
-/** Run ids that are non-terminal (still active) per their run.json. */
+/**
+ * Run ids gc must NOT reap: those still active, plus those in needsHuman (whose
+ * worktrees/branches are deliberately preserved for a human to inspect).
+ */
 async function liveRunIds(repoRoot: string): Promise<Set<string>> {
-  const live = new Set<string>();
+  const keep = new Set<string>();
   let ids: string[] = [];
   try {
     ids = await fs.readdir(runsRoot(repoRoot));
   } catch {
-    return live;
+    return keep;
   }
   for (const id of ids) {
     const state = await loadRun(repoRoot, id);
-    if (state && !isTerminal(state.status)) live.add(id);
+    if (!state) continue;
+    if (!isTerminal(state.status) || state.status === "needsHuman") {
+      keep.add(id);
+    }
   }
-  return live;
+  return keep;
 }

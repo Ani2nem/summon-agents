@@ -12,3 +12,4 @@ export * from "./dispatch.js";
 export * from "./validate.js";
 export * from "./merge.js";
 export * from "./pr.js";
+export * from "./orchestrate.js";

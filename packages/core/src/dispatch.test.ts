@@ -80,13 +80,19 @@ describe("dispatch + awaitRun", () => {
     });
     expect(records).toHaveLength(2);
 
-    // INSTRUCTIONS.md exists in each worktree.
+    // INSTRUCTIONS.md exists in each agent's run dir (NOT the worktree, so it is
+    // never committed and cannot collide across branches on merge).
+    const { agentRunDir } = await import("./run.js");
     for (const r of records) {
       const md = await fs.readFile(
-        path.join(r.worktree, "INSTRUCTIONS.md"),
+        path.join(agentRunDir(repo, runId, r.slug), "INSTRUCTIONS.md"),
         "utf8",
       );
       expect(md).toContain("Task:");
+      // And it must NOT be in the worktree.
+      await expect(
+        fs.access(path.join(r.worktree, "INSTRUCTIONS.md")),
+      ).rejects.toBeTruthy();
     }
     // agents.json persisted.
     const loaded = await loadAgents(repo, runId);

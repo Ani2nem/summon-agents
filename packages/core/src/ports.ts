@@ -99,8 +99,24 @@ export const TERMINAL_STATUSES: readonly RunStatus[] = [
   "failed",
 ];
 
+/**
+ * Terminal states that trigger cleanup of worktrees/branches. Note this excludes
+ * "needsHuman": that state means "stop for a human to look", so we must preserve
+ * the worktrees, branches, and integration branch for inspection - deleting them
+ * would destroy the very thing the human needs to see.
+ */
+export const CLEANUP_STATUSES: readonly RunStatus[] = [
+  "completed",
+  "aborted",
+  "failed",
+];
+
 export function isTerminal(status: RunStatus): boolean {
   return TERMINAL_STATUSES.includes(status);
+}
+
+export function triggersCleanup(status: RunStatus): boolean {
+  return CLEANUP_STATUSES.includes(status);
 }
 
 /** Persisted state for a run (run.json). */

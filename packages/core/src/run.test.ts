@@ -105,7 +105,7 @@ describe("cleanup on every terminal state", () => {
     return state;
   }
 
-  it.each(["completed", "needsHuman", "aborted", "failed"] as const)(
+  it.each(["completed", "aborted", "failed"] as const)(
     "removes worktrees and branches when transitioning to %s",
     async (status) => {
       const state = await seedRunWithWorktrees(`run-${status}`, [
@@ -130,6 +130,18 @@ describe("cleanup on every terminal state", () => {
       expect(remaining).toHaveLength(0);
     },
   );
+
+  it("PRESERVES worktrees and branches on needsHuman (for inspection)", async () => {
+    const state = await seedRunWithWorktrees("run-needshuman", ["auth"]);
+    await setRunStatus({ repoRoot: repo, state, status: "needsHuman" });
+    expect(await branchExists(repo, branchNameFor(state.runId, "auth"))).toBe(
+      true,
+    );
+    const remaining = (await listWorktrees(repo)).filter((e) =>
+      e.path.includes(state.runId),
+    );
+    expect(remaining.length).toBeGreaterThan(0);
+  });
 
   it("cleanupRun is idempotent", async () => {
     const state = await seedRunWithWorktrees("run-idem", ["auth"]);
