@@ -8,3 +8,4 @@ export * from "./run.js";
 export * from "./hotspots.js";
 export * from "./decompose.js";
 export * from "./triage.js";
+export * from "./dispatch.js";
