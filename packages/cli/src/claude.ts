@@ -33,7 +33,10 @@ export interface AgentCliConfig {
 export function agentConfigFromEnv(env = process.env): AgentCliConfig {
   return {
     bin: env.SUMMON_AGENT_BIN || "claude",
-    permissionMode: env.SUMMON_PERMISSION_MODE || "acceptEdits",
+    // Fully unattended by default (the agreed design): dispatched agents run in
+    // isolated worktrees and must not stall on mid-task prompts. Override with
+    // SUMMON_PERMISSION_MODE (e.g. "acceptEdits") for a more cautious run.
+    permissionMode: env.SUMMON_PERMISSION_MODE || "bypassPermissions",
     skipPermissions: env.SUMMON_YOLO === "1",
   };
 }
