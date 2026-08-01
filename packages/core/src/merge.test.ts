@@ -50,7 +50,7 @@ describe("runMerge", () => {
     await cleanupTempRepo(repo);
   });
 
-  it("merges disjoint lanes and fast-forwards local base", async () => {
+  it("merges disjoint lanes onto the integration branch, leaving base clean", async () => {
     const auth = await makeLane(repo, "auth", {
       "src/auth/login.ts": "export const login = () => {};\n",
     });
@@ -67,10 +67,15 @@ describe("runMerge", () => {
     });
 
     expect(outcome.status).toBe("merged");
-    // Both files are now on main.
+    // Base is left clean (not fast-forwarded) - the work lives on integration.
     await git(repo, ["checkout", "main"]);
+    expect(await fileOnDisk(repo, "src/auth/login.ts")).toBe(false);
+    expect(await fileOnDisk(repo, "src/api/routes.ts")).toBe(false);
+    // Both files are present on the integration branch (the deliverable).
+    await git(repo, ["checkout", outcome.integrationBranch]);
     expect(await fileOnDisk(repo, "src/auth/login.ts")).toBe(true);
     expect(await fileOnDisk(repo, "src/api/routes.ts")).toBe(true);
+    await git(repo, ["checkout", "main"]);
   });
 
   it("loophole A: blocks on a clean-but-broken merge, then merges after the judge fixes it", async () => {

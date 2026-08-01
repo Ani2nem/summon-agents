@@ -78,7 +78,7 @@ describe("runPipeline (end to end with fakes)", () => {
     await cleanupTempRepo(repo);
   });
 
-  it("splits, dispatches, merges, and reports a manual PR command when no remote", async () => {
+  it("no remote: fast-forwards work onto base and reports it landed there", async () => {
     const result = await runPipeline(
       repo,
       "Build auth and api",
@@ -94,9 +94,10 @@ describe("runPipeline (end to end with fakes)", () => {
     expect(result.status).toBe("completed");
     expect(result.mergedSlugs?.sort()).toEqual(["api", "auth"]);
     expect(result.pr?.opened).toBe(false);
-    expect(result.pr?.manualCommand).toContain("gh pr create");
+    expect(result.pr?.reason).toMatch(/no remote/i);
+    expect(result.landedOn).toBe("main");
 
-    // Both lanes landed on base.
+    // With no remote, both lanes fast-forwarded onto base.
     const { git } = await import("./worktree.js");
     await git(repo, ["checkout", "main"]);
     expect(
@@ -106,12 +107,54 @@ describe("runPipeline (end to end with fakes)", () => {
         .catch(() => false),
     ).toBe(true);
 
-    // Cleanup ran: no orphan worktrees remain for this run.
-    const { listWorktrees } = await import("./worktree.js");
+    // Cleanup ran: no orphan worktrees, and the (now-redundant) integration
+    // branch was removed since its commits are on base.
+    const { listWorktrees, branchExists } = await import("./worktree.js");
     const remaining = (await listWorktrees(repo)).filter((e) =>
       e.path.includes("pipe-1"),
     );
     expect(remaining).toHaveLength(0);
+    expect(await branchExists(repo, "summon/pipe-1/integration")).toBe(false);
+  });
+
+  it("with a remote: keeps work on the integration branch and opens a PR (base clean)", async () => {
+    const prVcs: Vcs = {
+      async hasRemote() {
+        return true;
+      },
+      async canOpenPr() {
+        return true;
+      },
+      async openPr() {
+        return { opened: true, url: "https://example/pr/7" };
+      },
+    };
+    const result = await runPipeline(
+      repo,
+      "Build auth and api",
+      {
+        judge: splittingJudge(split2),
+        runner: writingRunner(),
+        vcs: prVcs,
+        notifier: silentNotifier(),
+      },
+      { runId: "pipe-pr", watch: { intervalMs: 50 } },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.pr?.opened).toBe(true);
+    expect(result.landedOn).toBe("summon/pipe-pr/integration");
+
+    const { git, branchExists } = await import("./worktree.js");
+    // Base stays clean; the work is on the retained integration branch.
+    await git(repo, ["checkout", "main"]);
+    expect(
+      await fs
+        .access(path.join(repo, "src/auth/index.ts"))
+        .then(() => true)
+        .catch(() => false),
+    ).toBe(false);
+    expect(await branchExists(repo, "summon/pipe-pr/integration")).toBe(true);
   });
 
   it("skips when another run holds the lock (idempotency)", async () => {

@@ -239,11 +239,9 @@ export async function cleanupRun(input: {
       branch: branchNameFor(state.runId, slug),
     });
   }
-  // The local integration branch (its commits are on base / pushed for the PR).
-  await deleteBranch({
-    repoDir: repoRoot,
-    branch: `summon/${state.runId}/integration`,
-  });
+  // NOTE: the integration branch is intentionally NOT deleted here - it is the
+  // reviewable deliverable (the PR head), or already fast-forwarded into base and
+  // deleted explicitly by the caller in the no-remote path.
   await pruneWorktrees(repoRoot);
   // Remove the (now empty) per-run worktree directory if present.
   await fs.rm(path.join(worktreesRoot(repoRoot), state.runId), {
@@ -291,6 +289,9 @@ export async function gc(repoRoot: string): Promise<{
     "refs/heads/summon",
   ]).catch(() => "");
   for (const branch of branchOut.split("\n").filter(Boolean)) {
+    // Preserve integration branches: they are deliverables (PR heads) until the
+    // user merges them. gc only reaps per-task lane branches of dead runs.
+    if (branch.endsWith("/integration")) continue;
     const runId = runIdFromBranch(branch);
     if (runId && !activeRunIds.has(runId)) {
       await deleteBranch({ repoDir: repoRoot, branch });

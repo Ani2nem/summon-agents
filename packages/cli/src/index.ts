@@ -150,10 +150,12 @@ function printResult(result: Awaited<ReturnType<typeof runPipeline>>): void {
   }
   out.write(`summon-agents: completed run ${result.runId}\n`);
   out.write(`  merged: ${result.mergedSlugs?.join(", ") || "(none)"}\n`);
+  if (result.landedOn) out.write(`  work is on branch: ${result.landedOn}\n`);
   if (result.validationLabel) out.write(`  validated: ${result.validationLabel}\n`);
   if (result.pr?.opened) out.write(`  PR: ${result.pr.url}\n`);
   else if (result.pr?.manualCommand)
     out.write(`  open a PR: ${result.pr.manualCommand}\n`);
+  else if (result.pr?.reason) out.write(`  ${result.pr.reason}\n`);
   if (result.runCommand) out.write(`  run it: ${result.runCommand}\n`);
 }
 

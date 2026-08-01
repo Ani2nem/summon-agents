@@ -1,13 +1,16 @@
 // merge.ts - the boss merge, sequential and gated.
 //
 // Subtask branches merge into an integration branch (not straight into local
-// base, so a failed run never pollutes base). Conflicts are resolved by the
-// Judge; if conflict markers remain, we abort and stop for a human. After all
-// merges we regenerate lockfiles (loophole C) and run the validation gate
-// (loophole A). Only if everything passes do we fast-forward local base.
+// base, so a failed run never pollutes base, and the integration branch is the
+// reviewable deliverable). Conflicts are resolved by the Judge; if conflict
+// markers remain, we abort and stop for a human. After all merges we regenerate
+// existing lockfiles (loophole C) and run the validation gate (loophole A). On
+// success the work stays on the integration branch; the caller decides whether
+// to open a PR from it or fast-forward local base (when there is no remote).
 
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isLockfile } from "./hotspots.js";
+import { LOCKFILE_BASENAMES } from "./hotspots.js";
 import type { Judge, Notifier } from "./ports.js";
 import { detectPackageManager } from "./validate.js";
 import {
@@ -15,7 +18,17 @@ import {
   runValidation,
   type ValidationResult,
 } from "./validate.js";
+import { execa } from "execa";
 import { git, gitTry } from "./worktree.js";
+
+async function fileExists(p: string): Promise<boolean> {
+  try {
+    await fs.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export interface MergeTarget {
   slug: string;
@@ -36,7 +49,11 @@ export function integrationBranchName(runId: string): string {
   return `summon/${runId}/integration`;
 }
 
-/** Stage everything and commit if there is anything to commit. */
+/**
+ * Stage everything (including new files) and commit if anything changed. Use
+ * ONLY in a clean worktree (agent work) - in the main repo it would sweep up
+ * unrelated untracked files (e.g. the user's editor config).
+ */
 export async function commitAll(
   repoDir: string,
   message: string,
@@ -44,6 +61,22 @@ export async function commitAll(
   await git(repoDir, ["add", "-A"]);
   const status = await git(repoDir, ["status", "--porcelain"]);
   if (status === "") return false;
+  await git(repoDir, ["commit", "-m", message]);
+  return true;
+}
+
+/**
+ * Stage only tracked modifications (`git add -u`) and commit. Safe to run in the
+ * main repo: it never picks up stray untracked files. Used for judge-applied
+ * fixes to already-tracked files during merge/validation.
+ */
+export async function commitTracked(
+  repoDir: string,
+  message: string,
+): Promise<boolean> {
+  await git(repoDir, ["add", "-u"]);
+  const staged = await git(repoDir, ["diff", "--cached", "--name-only"]);
+  if (staged === "") return false;
   await git(repoDir, ["commit", "-m", message]);
   return true;
 }
@@ -69,17 +102,28 @@ async function hasConflictMarkers(repoDir: string): Promise<boolean> {
   return res.ok && res.stdout.trim().length > 0;
 }
 
-/** Regenerate lockfiles rather than trusting a git-merged one (loophole C). */
-async function regenerateLockfiles(
-  repoDir: string,
-  hotspotFiles: readonly string[],
-): Promise<void> {
-  if (!hotspotFiles.some(isLockfile)) return;
+/**
+ * Regenerate lockfiles rather than trusting a git-merged one (loophole C). Only
+ * touches lockfiles that ALREADY exist in the repo (never creates one), and
+ * stages only those lockfiles - so it can't sweep up unrelated untracked files
+ * or leave a misleading "regenerate lockfile" commit that changed no lockfile.
+ */
+async function regenerateLockfiles(repoDir: string): Promise<void> {
+  const existing: string[] = [];
+  for (const lf of LOCKFILE_BASENAMES) {
+    if (await fileExists(path.join(repoDir, lf))) existing.push(lf);
+  }
+  if (existing.length === 0) return; // repo uses no lockfile - nothing to do
+
   const pm = await detectPackageManager(repoDir);
-  await gitTry(repoDir, ["checkout", "--", "."]); // drop a half-merged lockfile
-  const res = await gitTry(pm === "npm" ? "npm" : pm, ["install"], );
-  void res; // best-effort; if the PM is unavailable we just skip regeneration
-  await commitAll(repoDir, "summon: regenerate lockfile").catch(() => false);
+  const install = await execa(pm, ["install"], { cwd: repoDir, reject: false });
+  if (install.exitCode !== 0) return; // PM unavailable - skip regeneration
+
+  for (const lf of existing) await gitTry(repoDir, ["add", lf]);
+  const staged = await git(repoDir, ["diff", "--cached", "--name-only"]);
+  if (staged !== "") {
+    await git(repoDir, ["commit", "-m", "summon: regenerate lockfile"]);
+  }
 }
 
 /**
@@ -125,7 +169,9 @@ export async function runMerge(input: {
         conflictedFiles: await unmergedPaths(repoRoot),
         repoDir: repoRoot,
       });
-      await gitTry(repoRoot, ["add", "-A"]);
+      // Stage only tracked (resolved) files; git already staged the merge's own
+      // additions. Never `add -A` here - it would sweep unrelated untracked files.
+      await gitTry(repoRoot, ["add", "-u"]);
       const markers = await hasConflictMarkers(repoRoot);
       if (!resolved || markers) {
         await gitTry(repoRoot, ["merge", "--abort"]);
@@ -144,7 +190,7 @@ export async function runMerge(input: {
     mergedSlugs.push(target.slug);
   }
 
-  await regenerateLockfiles(repoRoot, input.hotspotFiles ?? []);
+  await regenerateLockfiles(repoRoot);
 
   // Validation gate (loophole A).
   let validation = noValidation;
@@ -160,7 +206,7 @@ export async function runMerge(input: {
         validationOutput: validation.output,
       });
       if (fixed) {
-        await commitAll(repoRoot, "summon: fix validation failures");
+        await commitTracked(repoRoot, "summon: fix validation failures");
         validation = await runValidation(repoRoot, cmd);
       }
       if (!validation.ok) {
@@ -177,9 +223,11 @@ export async function runMerge(input: {
     }
   }
 
-  // Everything passed: fast-forward local base to the integration result.
+  // Everything passed. The work stays on the integration branch (the reviewable
+  // deliverable); return to base without fast-forwarding it. The caller opens a
+  // PR from the integration branch, or fast-forwards base only when there is no
+  // remote to PR against.
   await git(repoRoot, ["checkout", baseBranch]);
-  await git(repoRoot, ["merge", "--ff-only", integrationBranch]);
 
   return {
     status: "merged",

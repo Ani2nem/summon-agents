@@ -7,7 +7,7 @@
 
 import { dispatchDecision, awaitRun, type WatchOptions } from "./dispatch.js";
 import {
-  commitAll,
+  commitTracked,
   detectRunCommand,
   runMerge,
   type MergeTarget,
@@ -31,6 +31,7 @@ import {
   setRunStatus,
 } from "./run.js";
 import { runTriage } from "./triage.js";
+import { deleteBranch, git } from "./worktree.js";
 
 export interface PipelineResult {
   status: "skipped" | "completed" | "needsHuman";
@@ -38,6 +39,8 @@ export interface PipelineResult {
   reason: string;
   decision?: TriageDecision;
   mergedSlugs?: string[];
+  /** Branch the work landed on: the integration branch (PR) or base (no remote). */
+  landedOn?: string;
   pr?: PrResult;
   runCommand?: string | null;
   validationLabel?: string;
@@ -99,7 +102,7 @@ export async function runPipeline(
     if (decision.preInstall.length > 0) {
       notifier.info(`installing shared deps: ${decision.preInstall.join(", ")}`);
       await installDependencies(repoRoot, decision.preInstall);
-      await commitAll(repoRoot, "summon: pre-install shared dependencies");
+      await commitTracked(repoRoot, "summon: pre-install shared dependencies");
     }
 
     // Dispatch + supervise.
@@ -164,19 +167,39 @@ export async function runPipeline(
       };
     }
 
-    // PR (never merges remote; degrades to a manual command).
-    const pr = await openPullRequest({
-      repoDir: repoRoot,
-      branch: merge.integrationBranch,
-      baseBranch,
-      title: firstLine(plan) || "summon-agents changes",
-      body: prBody(decision),
-      vcs,
-    });
+    // Decide where the work lands. If a remote + PR tooling exist, keep the work
+    // on the integration branch and open a PR against base (base stays clean,
+    // reviewable). Otherwise there is nothing to PR against, so fast-forward local
+    // base onto the integration result and report it as landed locally.
+    const canPr =
+      (await vcs.hasRemote(repoRoot)) && (await vcs.canOpenPr(repoRoot));
+
+    let pr: PrResult;
+    let landedOn: string;
+    if (canPr) {
+      pr = await openPullRequest({
+        repoDir: repoRoot,
+        branch: merge.integrationBranch,
+        baseBranch,
+        title: firstLine(plan) || "summon-agents changes",
+        body: prBody(decision),
+        vcs,
+      });
+      landedOn = merge.integrationBranch;
+    } else {
+      await git(repoRoot, ["checkout", baseBranch]);
+      await git(repoRoot, ["merge", "--ff-only", merge.integrationBranch]);
+      await deleteBranch({ repoDir: repoRoot, branch: merge.integrationBranch });
+      pr = {
+        opened: false,
+        reason: `no remote configured - work is merged locally onto ${baseBranch}`,
+      };
+      landedOn = baseBranch;
+    }
 
     const runCommand = await detectRunCommand(repoRoot);
     state = await setRunStatus({ repoRoot, state, status: "completed" });
-    notifier.runDone(state, summarize(merge.mergedSlugs, pr, runCommand));
+    notifier.runDone(state, summarize(landedOn, pr, runCommand));
 
     return {
       status: "completed",
@@ -184,6 +207,7 @@ export async function runPipeline(
       reason: "merged and validated",
       decision,
       mergedSlugs: merge.mergedSlugs,
+      landedOn,
       pr,
       runCommand,
       validationLabel: merge.validation.label,
@@ -210,13 +234,14 @@ function prBody(decision: TriageDecision): string {
 }
 
 function summarize(
-  merged: string[],
+  landedOn: string,
   pr: PrResult,
   runCommand: string | null,
 ): string {
-  const parts = [`merged: ${merged.join(", ") || "(none)"}`];
+  const parts = [`work is on branch: ${landedOn}`];
   if (pr.opened) parts.push(`PR: ${pr.url}`);
   else if (pr.manualCommand) parts.push(`open a PR with: ${pr.manualCommand}`);
+  else if (pr.reason) parts.push(pr.reason);
   if (runCommand) parts.push(`run it: ${runCommand}`);
   return parts.join(" | ");
 }

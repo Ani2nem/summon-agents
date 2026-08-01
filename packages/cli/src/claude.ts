@@ -80,7 +80,10 @@ Rules:
 - Split ONLY when there are multiple pieces of work touching NON-OVERLAPPING sets of files.
 - If the work is small, or the pieces share files, use "single" with exactly one subtask.
 - allowedFiles is each task's disjoint lane. Do not let two tasks share a code file.
-- Put shared manifests/lockfiles/schemas in hotspotFiles, not in any lane.`;
+- COVER THE WHOLE PLAN. Every file the plan says to create or modify must be owned by exactly one subtask's allowedFiles. Never drop a planned change.
+- Shared CODE files that need real edits (an entry point like index.js, a barrel/index, a shared types file, a router that wires features together) are NOT hotspots. Assign such a file - and the wiring work for it - to exactly ONE subtask (typically the task it most depends on), or keep the whole plan as a single agent if the wiring cannot be cleanly assigned. Do not leave wiring unowned.
+- Only put files that need NO real logic edits - manifests, lockfiles, generated schemas - in hotspotFiles.
+- Before responding, check: does the union of all subtasks' allowedFiles cover every file the plan mentions? If not, fix the split or use "single".`;
 
 /** Parse the first JSON object out of a model's text response. */
 export function parseTriageResponse(text: string, plan: string): TriageDecision {
