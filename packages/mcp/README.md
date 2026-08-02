@@ -63,7 +63,7 @@ It splits the work, runs the agents, merges the result, and tells you exactly ho
 - **Have a remote (+ `gh`)?** It opens a **pull request** — and never merges it. That's your call.
 - **Want to look before it lands?** Ask for review. It stages the merged, validated work on a branch and waits for your go-ahead before finalizing.
 
-> The review checkpoint held for your approval in both Claude Code and VS Code in testing. Since it relies on your editor's agent honoring the pause, use a **remote** when you want a hard, unbypassable human sign-off — a PR can only be merged by you.
+> The review checkpoint is reliable in **Claude Code** — it stops and waits for you. **Copilot (VS Code) tends to review and self-approve** rather than wait, so treat the local review gate there as best-effort. When you need a hard, unbypassable human sign-off, use a **remote**: a PR can only be merged by you, no matter what the agent does.
 
 ---
 
