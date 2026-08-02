@@ -222,13 +222,13 @@ export async function runPipeline(
         status: "awaitingReview",
       });
       notifier.info(
-        `review gate: ${merge.mergedSlugs.length} task(s) merged + validated on ${merge.integrationBranch}. Review the diff (git diff ${baseBranch}...${merge.integrationBranch}), then finalize to land it.`,
+        `review gate: ${merge.mergedSlugs.length} task(s) merged + validated on ${merge.integrationBranch}. STOP and hand control to the human: show them the diff (git diff ${baseBranch}...${merge.integrationBranch}) and wait for THEIR explicit approval. Do NOT finalize on your own.`,
       );
       return {
         status: "awaitingReview",
         runId,
         reason:
-          "merged and validated on the integration branch; awaiting your review before finalizing",
+          "HUMAN REVIEW REQUIRED. Merged + validated on the integration branch, but NOT finalized. Present the diff to the user and wait for the user's explicit go-ahead. Do NOT call summon_merge / finalize yourself - only after the human approves.",
         decision,
         mergedSlugs: merge.mergedSlugs,
         landedOn: merge.integrationBranch,

@@ -64,7 +64,7 @@ function formatResult(lines: string[], result: PipelineResult): string {
   if (result.runCommand) out.push(`run it: ${result.runCommand}`);
   if (result.status === "awaitingReview") {
     out.push(
-      `To finalize after reviewing, call summon_merge with runId "${result.runId}". To discard, call summon_abort.`,
+      `HUMAN REVIEW REQUIRED - do NOT finalize this yourself. Present the diff above to the user and WAIT for the user to explicitly say to merge. Only after the user approves, call summon_merge with runId "${result.runId}". If the user wants to discard, call summon_abort. Do not call summon_merge based on your own judgment.`,
     );
   }
   return out.join("\n");
@@ -89,7 +89,7 @@ export function createServer(repoRoot: string = process.cwd()): McpServer {
           .boolean()
           .optional()
           .describe(
-            "If true, merge + validate but do NOT finalize - stop at a review gate and return awaitingReview. The user reviews the diff, then you call summon_merge to land it.",
+            "If true, merge + validate but do NOT finalize - stop at a HUMAN review gate and return awaitingReview. You must then present the diff to the user and wait for the USER's explicit approval before calling summon_merge. Do not self-approve. Set this when the user asks to review before merging.",
           ),
       },
     },
@@ -122,7 +122,7 @@ export function createServer(repoRoot: string = process.cwd()): McpServer {
     {
       title: "Finalize a summon-agents run held for review",
       description:
-        "Finalize a run that was held by review=true: fast-forward the base branch onto the reviewed integration branch (no remote) or open a PR (remote present). Call this after the user has reviewed the diff and approved.",
+        "Finalize a run that was held by review=true: fast-forward the base branch onto the reviewed integration branch (no remote) or open a PR (remote present). ONLY call this after the HUMAN user has looked at the diff and explicitly told you to merge. Never call it based on your own review - the whole point of the gate is human approval.",
       inputSchema: {
         runId: z.string().describe("The run id to finalize."),
       },
