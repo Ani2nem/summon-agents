@@ -14,6 +14,7 @@ import {
   runMerge,
   type MergeTarget,
 } from "./merge.js";
+import { integrationBranchName } from "./merge.js";
 import { openPullRequest, preflight } from "./pr.js";
 import { installDependencies } from "./validate.js";
 import type {
@@ -27,6 +28,7 @@ import type {
 import {
   acquireLock,
   createRun,
+  loadRun,
   newRunId,
   releaseLock,
   saveRun,
@@ -36,13 +38,15 @@ import { runTriage } from "./triage.js";
 import { changedFilesVsBase, deleteBranch, git } from "./worktree.js";
 
 export interface PipelineResult {
-  status: "skipped" | "completed" | "needsHuman";
+  status: "skipped" | "completed" | "needsHuman" | "awaitingReview";
   runId: string;
   reason: string;
   decision?: TriageDecision;
   mergedSlugs?: string[];
   /** Branch the work landed on: the integration branch (PR) or base (no remote). */
   landedOn?: string;
+  /** The integration branch holding the merged+validated work (for review/finalize). */
+  integrationBranch?: string;
   pr?: PrResult;
   runCommand?: string | null;
   validationLabel?: string;
@@ -58,6 +62,14 @@ export interface PipelineDeps {
 export interface PipelineOptions {
   runId?: string;
   watch?: WatchOptions;
+  /**
+   * Hold the merge for review (the --review / supervised gate). When true, the
+   * pipeline merges + validates onto the integration branch but does NOT finalize
+   * (no fast-forward to base, no PR). It returns "awaitingReview"; the caller
+   * finalizes later via finalizeRun (summon_merge). Default false = auto-finalize,
+   * identical to before.
+   */
+  review?: boolean;
 }
 
 /** Run the whole thing for an approved plan. Safe to call from a hook. */
@@ -200,54 +212,105 @@ export async function runPipeline(
       };
     }
 
-    // Decide where the work lands. If a remote + PR tooling exist, keep the work
-    // on the integration branch and open a PR against base (base stays clean,
-    // reviewable). Otherwise there is nothing to PR against, so fast-forward local
-    // base onto the integration result and report it as landed locally.
-    const canPr =
-      (await vcs.hasRemote(repoRoot)) && (await vcs.canOpenPr(repoRoot));
-
-    let pr: PrResult;
-    let landedOn: string;
-    if (canPr) {
-      pr = await openPullRequest({
-        repoDir: repoRoot,
-        branch: merge.integrationBranch,
-        baseBranch,
-        title: firstLine(plan) || "summon-agents changes",
-        body: prBody(decision),
-        vcs,
+    // The review gate: work is merged + validated on the integration branch, but
+    // the user asked to approve before it lands. Stop here (base untouched, nothing
+    // pushed) and hand off; the caller finalizes later via finalizeRun.
+    if (options.review) {
+      state = await setRunStatus({
+        repoRoot,
+        state,
+        status: "awaitingReview",
       });
-      landedOn = merge.integrationBranch;
-    } else {
-      await git(repoRoot, ["checkout", baseBranch]);
-      await git(repoRoot, ["merge", "--ff-only", merge.integrationBranch]);
-      await deleteBranch({ repoDir: repoRoot, branch: merge.integrationBranch });
-      pr = {
-        opened: false,
-        reason: `no remote configured - work is merged locally onto ${baseBranch}`,
+      notifier.info(
+        `review gate: ${merge.mergedSlugs.length} task(s) merged + validated on ${merge.integrationBranch}. Review the diff (git diff ${baseBranch}...${merge.integrationBranch}), then finalize to land it.`,
+      );
+      return {
+        status: "awaitingReview",
+        runId,
+        reason:
+          "merged and validated on the integration branch; awaiting your review before finalizing",
+        decision,
+        mergedSlugs: merge.mergedSlugs,
+        landedOn: merge.integrationBranch,
+        integrationBranch: merge.integrationBranch,
+        validationLabel: merge.validation.label,
       };
-      landedOn = baseBranch;
     }
 
-    const runCommand = await detectRunCommand(repoRoot);
-    state = await setRunStatus({ repoRoot, state, status: "completed" });
-    notifier.runDone(state, summarize(landedOn, pr, runCommand));
-
-    return {
-      status: "completed",
-      runId,
-      reason: "merged and validated",
-      decision,
-      mergedSlugs: merge.mergedSlugs,
-      landedOn,
-      pr,
-      runCommand,
-      validationLabel: merge.validation.label,
-    };
+    // Default: finalize immediately (auto-merge / PR), identical to before.
+    const result = await finalizeRun(repoRoot, runId, { vcs, notifier });
+    return { ...result, validationLabel: merge.validation.label };
   } finally {
     await releaseLock(repoRoot);
   }
+}
+
+/**
+ * Finalize a run whose work is merged + validated on its integration branch:
+ * open a PR (remote present) or fast-forward local base (no remote). Used both as
+ * the default tail of runPipeline and, for the --review gate, called later on the
+ * user's approval (summon_merge). Reloads everything from the run's state.
+ */
+export async function finalizeRun(
+  repoRoot: string,
+  runId: string,
+  deps: { vcs: Vcs; notifier: Notifier },
+): Promise<PipelineResult> {
+  const { vcs, notifier } = deps;
+  const state = await loadRun(repoRoot, runId);
+  if (!state) {
+    return { status: "needsHuman", runId, reason: `no such run: ${runId}` };
+  }
+  if (state.status === "completed") {
+    return { status: "completed", runId, reason: "already finalized" };
+  }
+  const baseBranch = state.baseBranch;
+  const decision = state.decision ?? undefined;
+  const integrationBranch = integrationBranchName(runId);
+  const mergedSlugs = decision?.subtasks.map((s) => s.slug) ?? [];
+
+  // Decide where the work lands. If a remote + PR tooling exist, keep the work on
+  // the integration branch and open a PR against base (base stays clean). Otherwise
+  // fast-forward local base onto the integration result and report it as landed.
+  const canPr = (await vcs.hasRemote(repoRoot)) && (await vcs.canOpenPr(repoRoot));
+
+  let pr: PrResult;
+  let landedOn: string;
+  if (canPr) {
+    pr = await openPullRequest({
+      repoDir: repoRoot,
+      branch: integrationBranch,
+      baseBranch,
+      title: firstLine(state.plan) || "summon-agents changes",
+      body: decision ? prBody(decision) : "Automated by summon-agents.",
+      vcs,
+    });
+    landedOn = integrationBranch;
+  } else {
+    await git(repoRoot, ["checkout", baseBranch]);
+    await git(repoRoot, ["merge", "--ff-only", integrationBranch]);
+    await deleteBranch({ repoDir: repoRoot, branch: integrationBranch });
+    pr = {
+      opened: false,
+      reason: `no remote configured - work is merged locally onto ${baseBranch}`,
+    };
+    landedOn = baseBranch;
+  }
+
+  const runCommand = await detectRunCommand(repoRoot);
+  const done = await setRunStatus({ repoRoot, state, status: "completed" });
+  notifier.runDone(done, summarize(landedOn, pr, runCommand));
+
+  return {
+    status: "completed",
+    runId,
+    reason: "merged and validated",
+    decision,
+    mergedSlugs,
+    landedOn,
+    pr,
+    runCommand,
+  };
 }
 
 function firstLine(text: string): string {

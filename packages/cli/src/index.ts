@@ -35,6 +35,7 @@ program
   .option("--from-hook", "read the plan from an editor hook payload on stdin")
   .option("--host <host>", "hook host (claude-code|cursor|copilot)", "claude-code")
   .option("--yolo", "skip mid-task permission prompts (full autonomy)")
+  .option("--review", "hold the merge for your review; finalize with `summon-agents merge <runId>`")
   .option("--timeout <ms>", "hard per-agent timeout in ms")
   .action(async (opts) => {
     const repoRoot = process.cwd();
@@ -77,9 +78,24 @@ program
       },
       {
         watch: opts.timeout ? { timeoutMs: Number(opts.timeout) } : undefined,
+        review: Boolean(opts.review),
       },
     );
 
+    printResult(result);
+    process.exit(result.status === "needsHuman" ? 1 : 0);
+  });
+
+program
+  .command("merge <runId>")
+  .description("Finalize a run held by --review (fast-forward base / open PR)")
+  .action(async (runId: string) => {
+    const repoRoot = process.cwd();
+    const { finalizeRun } = await import("@summon-agents/core");
+    const result = await finalizeRun(repoRoot, runId, {
+      vcs: new GhVcs(),
+      notifier: stdoutNotifier(),
+    });
     printResult(result);
     process.exit(result.status === "needsHuman" ? 1 : 0);
   });
@@ -146,6 +162,15 @@ function printResult(result: Awaited<ReturnType<typeof runPipeline>>): void {
   }
   if (result.status === "needsHuman") {
     out.write(`summon-agents: needs a human - ${result.reason}\n`);
+    return;
+  }
+  if (result.status === "awaitingReview") {
+    out.write(`summon-agents: awaiting review - run ${result.runId}\n`);
+    out.write(`  merged: ${result.mergedSlugs?.join(", ") || "(none)"}\n`);
+    if (result.integrationBranch)
+      out.write(`  review: git diff main...${result.integrationBranch}\n`);
+    if (result.validationLabel) out.write(`  validated: ${result.validationLabel}\n`);
+    out.write(`  finalize: summon-agents merge ${result.runId}\n`);
     return;
   }
   out.write(`summon-agents: completed run ${result.runId}\n`);

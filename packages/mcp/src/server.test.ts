@@ -70,9 +70,57 @@ describe("summon-agents MCP server", () => {
       "summon_abort",
       "summon_agents",
       "summon_gc",
+      "summon_merge",
       "summon_status",
     ]);
     await client.close();
+  });
+
+  it("review gate: summon_agents(review) holds, summon_merge finalizes", async () => {
+    const prevBin = process.env.SUMMON_AGENT_BIN;
+    process.env.SUMMON_AGENT_BIN = stub;
+    try {
+      const client = await connect(dir);
+      const held = (await client.callTool({
+        name: "summon_agents",
+        arguments: { plan: "Do a small thing", review: true },
+      })) as { content: { text: string }[] };
+      const heldBody = held.content.map((c) => c.text).join("\n");
+      expect(heldBody).toMatch(/status: awaitingReview/);
+      expect(heldBody).toMatch(/summon_merge/);
+      // Nothing landed on main yet.
+      expect(
+        await fs
+          .access(path.join(dir, "done.txt"))
+          .then(() => true)
+          .catch(() => false),
+      ).toBe(false);
+
+      // Grab the runId from status and finalize it.
+      const status = (await client.callTool({
+        name: "summon_status",
+        arguments: {},
+      })) as { content: { text: string }[] };
+      const runId = status.content[0]!.text.split(":")[0]!.trim();
+
+      const merged = (await client.callTool({
+        name: "summon_merge",
+        arguments: { runId },
+      })) as { content: { text: string }[] };
+      expect(merged.content.map((c) => c.text).join("\n")).toMatch(
+        /status: completed/,
+      );
+      expect(
+        await fs
+          .access(path.join(dir, "done.txt"))
+          .then(() => true)
+          .catch(() => false),
+      ).toBe(true);
+      await client.close();
+    } finally {
+      if (prevBin === undefined) delete process.env.SUMMON_AGENT_BIN;
+      else process.env.SUMMON_AGENT_BIN = prevBin;
+    }
   });
 
   it("summon_agents runs the pipeline end-to-end via MCP", async () => {

@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ExecAgentRunner } from "./dispatch.js";
-import { runPipeline } from "./orchestrate.js";
+import { finalizeRun, runPipeline } from "./orchestrate.js";
 import type {
   AgentRunner,
   Judge,
@@ -211,6 +211,48 @@ describe("runPipeline (end to end with fakes)", () => {
         .then(() => true)
         .catch(() => false),
     ).toBe(false);
+  });
+
+  it("review gate: holds the merge on the integration branch, then finalizeRun lands it", async () => {
+    const deps = {
+      judge: splittingJudge(split2),
+      runner: writingRunner(),
+      vcs: noRemoteVcs,
+      notifier: silentNotifier(),
+    };
+    const held = await runPipeline(repo, "Build auth and api", deps, {
+      runId: "pipe-review",
+      watch: { intervalMs: 50 },
+      review: true,
+    });
+
+    // Held: merged+validated on the integration branch, base untouched, not final.
+    expect(held.status).toBe("awaitingReview");
+    expect(held.integrationBranch).toBe("summon/pipe-review/integration");
+    const { git, branchExists } = await import("./worktree.js");
+    await git(repo, ["checkout", "main"]);
+    expect(
+      await fs
+        .access(path.join(repo, "src/auth/index.ts"))
+        .then(() => true)
+        .catch(() => false),
+    ).toBe(false); // base is clean - nothing landed yet
+    expect(await branchExists(repo, "summon/pipe-review/integration")).toBe(true);
+
+    // Finalize on approval: no remote -> fast-forward base.
+    const done = await finalizeRun(repo, "pipe-review", {
+      vcs: noRemoteVcs,
+      notifier: silentNotifier(),
+    });
+    expect(done.status).toBe("completed");
+    expect(done.landedOn).toBe("main");
+    await git(repo, ["checkout", "main"]);
+    expect(
+      await fs
+        .access(path.join(repo, "src/auth/index.ts"))
+        .then(() => true)
+        .catch(() => false),
+    ).toBe(true); // now it landed
   });
 
   it("brake: a single-mode decision runs one agent (no fan-out)", async () => {

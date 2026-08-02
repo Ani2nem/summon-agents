@@ -87,6 +87,8 @@ export type RunStatus =
   | "created" // run allocated, nothing dispatched yet
   | "dispatched" // agents launched, running
   | "merging" // agents done, boss merge + validation underway
+  | "awaitingReview" // merged+validated on the integration branch; --review gate,
+  // waiting for the user to finalize (ff base / open PR). NON-terminal.
   | "completed" // merged locally + PR opened (or handed off), done
   | "needsHuman" // a gate failed (bad merge, validation, conflicts) - stop
   | "aborted" // user/tool aborted

@@ -16,6 +16,7 @@ import {
   agentConfigFromEnv,
   claudeCommandBuilder,
   claudeJudge,
+  finalizeRun,
   gc,
   loadRun,
   runPipeline,
@@ -61,6 +62,11 @@ function formatResult(lines: string[], result: PipelineResult): string {
   else if (result.pr?.manualCommand) out.push(`open a PR: ${result.pr.manualCommand}`);
   else if (result.pr?.reason) out.push(result.pr.reason);
   if (result.runCommand) out.push(`run it: ${result.runCommand}`);
+  if (result.status === "awaitingReview") {
+    out.push(
+      `To finalize after reviewing, call summon_merge with runId "${result.runId}". To discard, call summon_abort.`,
+    );
+  }
   return out.join("\n");
 }
 
@@ -73,15 +79,21 @@ export function createServer(repoRoot: string = process.cwd()): McpServer {
     {
       title: "Summon parallel agents for an approved plan",
       description:
-        "Execute an APPROVED implementation plan by dispatching it to parallel, isolated agents in git worktrees, then merging their work back (gated on a clean, validated merge) and opening a PR. Call this INSTEAD of implementing the plan yourself. Only call it once a plan has been approved.",
+        "Execute an APPROVED implementation plan by dispatching it to parallel, isolated agents in git worktrees, then merging their work back (gated on a clean, validated merge) and opening a PR. Call this INSTEAD of implementing the plan yourself. Only call it once a plan has been approved. Set review=true to hold the merge for the user to approve first (then finalize with summon_merge).",
       inputSchema: {
         plan: z
           .string()
           .min(1)
           .describe("The full approved implementation plan to execute."),
+        review: z
+          .boolean()
+          .optional()
+          .describe(
+            "If true, merge + validate but do NOT finalize - stop at a review gate and return awaitingReview. The user reviews the diff, then you call summon_merge to land it.",
+          ),
       },
     },
-    async ({ plan }) => {
+    async ({ plan, review }) => {
       const cfg = agentConfigFromEnv();
       if (!(await agentAvailable(cfg))) {
         return text(
@@ -90,9 +102,34 @@ export function createServer(repoRoot: string = process.cwd()): McpServer {
         );
       }
       const lines: string[] = [];
-      const result = await runPipeline(repoRoot, plan, {
-        judge: claudeJudge(cfg),
-        runner: new ExecAgentRunner(claudeCommandBuilder(cfg)),
+      const result = await runPipeline(
+        repoRoot,
+        plan,
+        {
+          judge: claudeJudge(cfg),
+          runner: new ExecAgentRunner(claudeCommandBuilder(cfg)),
+          vcs: new GhVcs(),
+          notifier: collectingNotifier(lines),
+        },
+        { review: Boolean(review) },
+      );
+      return text(formatResult(lines, result), result.status === "needsHuman");
+    },
+  );
+
+  server.registerTool(
+    "summon_merge",
+    {
+      title: "Finalize a summon-agents run held for review",
+      description:
+        "Finalize a run that was held by review=true: fast-forward the base branch onto the reviewed integration branch (no remote) or open a PR (remote present). Call this after the user has reviewed the diff and approved.",
+      inputSchema: {
+        runId: z.string().describe("The run id to finalize."),
+      },
+    },
+    async ({ runId }) => {
+      const lines: string[] = [];
+      const result = await finalizeRun(repoRoot, runId, {
         vcs: new GhVcs(),
         notifier: collectingNotifier(lines),
       });
