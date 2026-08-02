@@ -1,17 +1,50 @@
 {
   "name": "summon-agents-mcp",
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "MCP server for summon-agents: dispatch an approved plan to parallel AI coding agents from Claude Code, Cursor, or VS Code.",
   "type": "module",
   "bin": {
     "summon-agents-mcp": "./dist/index.js"
   },
-  "files": ["dist"],
+  "files": ["dist", "README.md"],
+  "keywords": [
+    "ai",
+    "agents",
+    "mcp",
+    "model-context-protocol",
+    "coding-agent",
+    "parallel",
+    "git-worktree",
+    "claude-code",
+    "cursor",
+    "copilot"
+  ],
+  "homepage": "https://github.com/Ani2nem/summon-agents#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ani2nem/summon-agents.git",
+    "directory": "packages/mcp"
+  },
+  "bugs": {
+    "url": "https://github.com/Ani2nem/summon-agents/issues"
+  },
+  "author": "Anirudh Nemmani <ani2nem@gmail.com>",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsup"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@summon-agents/core": "workspace:*",
+    "execa": "^9.5.2",
     "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@summon-agents/core": "workspace:*"
   }
 }

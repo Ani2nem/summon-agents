@@ -1,18 +1,51 @@
 {
   "name": "summon-agents",
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Turn one approved plan into a team of AI coding agents that build it in parallel, in isolated git worktrees, from inside your editor.",
   "type": "module",
   "bin": {
     "summon-agents": "./dist/index.js"
   },
-  "files": ["dist"],
+  "files": ["dist", "README.md"],
+  "keywords": [
+    "ai",
+    "agents",
+    "coding-agent",
+    "parallel",
+    "git-worktree",
+    "claude",
+    "claude-code",
+    "cursor",
+    "copilot",
+    "mcp",
+    "orchestrator"
+  ],
+  "homepage": "https://github.com/Ani2nem/summon-agents#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ani2nem/summon-agents.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/Ani2nem/summon-agents/issues"
+  },
+  "author": "Anirudh Nemmani <ani2nem@gmail.com>",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsup"
   },
   "dependencies": {
-    "@summon-agents/core": "workspace:*",
     "commander": "^12.1.0",
     "execa": "^9.5.2",
     "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@summon-agents/core": "workspace:*"
   }
 }
