@@ -1,35 +1,35 @@
 # summon-agents
 
-**Turn one approved plan into a team of AI agents that build it in parallel — from inside your editor's chat.**
+**Approve a plan, walk away, come back to finished work. Your coffee's still warm.**
 
-You plan a change like normal. summon-agents decides whether the work is worth splitting, runs a separate coding agent for each independent piece in its own isolated git worktree, merges their work back (only if it's clean and passes your project's checks), and hands you the result. No terminal juggling, no tmux, no manual merges.
+summon-agents turns one approved plan into a team of AI coding agents that build it in parallel — each in its own isolated git worktree — then merges their work back and hands you the result, right from your editor's chat.
 
-Works in **Claude Code**, **VS Code (Copilot)**, and **Cursor** through one small MCP server.
+Works in **Claude Code**, **VS Code (Copilot)**, and **Cursor**.
 
 ---
 
-## The problem it solves
+## The problem
 
-You ask an AI agent to build three things — say a login page, a dashboard, and a settings form. A single agent does them **one after another**, in **one context window**:
+You ask your AI agent to build three things — a login page, a dashboard, a settings form. It builds them one at a time, in one long conversation. Slow, and it gets a little sloppier with each feature as the context fills up.
 
-- It's **slow** — the work is serial even though the pieces are independent.
-- It gets **sloppier** as it goes — a long, crowded context dilutes the model's attention, so the third feature gets less care than the first.
-- A mistake mid-way can leave your working tree **half-broken**.
+So you try to parallelize it yourself. You create a git worktree for each task. You open three terminal tabs. You start tmux. You launch an agent in each, paste in instructions, and go grab a coffee while they work.
 
-The manual fix is worse: hand-create a git worktree per task, open a stack of terminal tabs, start tmux, launch an agent in each, babysit the permission prompts, then merge it all together yourself.
+You come back. One agent stopped to ask permission twenty minutes ago and has just been... sitting there. Another wandered into the wrong files. The third finished, but now you get to merge all three by hand. You're sweating, hunched over three terminals trying to figure out what happened, and your coffee is stone cold. You spent the whole time babysitting instead of thinking.
 
-**summon-agents automates that entire pipeline behind one step.**
+**That's the tax on doing this yourself.** summon-agents pays it for you: **no terminal juggling, no tmux, no manual merges.** You approve a plan, walk away, and come back to finished, merged, validated work.
 
-## Why parallel beats one agent
+## Why a team beats one agent
 
-| | Single agent | summon-agents |
+It's not just faster — it's better work:
+
+| | One agent | summon-agents |
 |---|---|---|
-| **Speed** | serial — total time = sum of all tasks | parallel — total time ≈ the *slowest* task |
-| **Focus** | one bloated context; attention dilutes | each agent gets a clean, narrow context for *its* task → deeper, less sloppy work |
-| **Safety** | a bad step dirties your working tree | each agent is sandboxed in its own worktree; a bad attempt is contained and thrown away |
-| **Review** | changes interleaved in one blob | each task is an isolated, reviewable unit |
+| **Speed** | serial: total time = every task added up | parallel: total time ≈ the *slowest* task |
+| **Focus** | one bloated context, attention spread thin | each agent gets a clean, narrow context for *its* task — so it goes deeper and stays sharp |
+| **Safety** | a wrong turn dirties your working tree | each agent is sandboxed in its own worktree; a bad attempt is contained and thrown away |
+| **Review** | everything tangled in one blob | each task is a clean, separate unit you can actually read |
 
-And it's not dumb about it: if the work is small or the pieces are coupled (they share files), the **brake** runs a single focused agent instead — because forcing a split on coupled work just creates merge conflicts.
+And it's not reckless about it. If the work is small, or the pieces are tangled together (they touch the same files), the **brake** just runs one focused agent — because forcing a split on coupled work only creates merge conflicts. It splits when splitting helps, and doesn't when it doesn't.
 
 ---
 
@@ -38,55 +38,55 @@ And it's not dumb about it: if the work is small or the pieces are coupled (they
 One command sets up your editor:
 
 ```bash
-npx -y summon-agents init          # in your project root (Claude Code)
-npx -y summon-agents init --host cursor
-npx -y summon-agents init --host copilot
+npx -y summon-agents init                 # Claude Code
+npx -y summon-agents init --host cursor    # Cursor
+npx -y summon-agents init --host copilot   # VS Code (Copilot)
 ```
 
-That registers the MCP server and writes the trigger. Requirements: **git**, **Node 20+**, and a coding-agent CLI on your PATH (**[Claude Code](https://claude.com/claude-code)** by default; set `SUMMON_AGENT_BIN` for another).
+You'll need **git**, **Node 20+**, and a coding-agent CLI on your PATH — **[Claude Code](https://claude.com/claude-code)** by default (set `SUMMON_AGENT_BIN` to use another).
 
 ## Use it
 
-Plan your change in the editor as usual, then:
+Plan your change in the editor like you always do. Then, instead of letting one agent grind through it:
 
-**Implicit** — just ask (the agent calls the tool for you):
+**Just ask** (your agent calls the tool for you):
 > Use summon_agents to add src/login.js, src/dashboard.js, and src/settings.js — three independent modules.
 
-**Explicit** — the trigger command (Claude Code):
+**Or use the shortcut** (Claude Code):
 > `/summon-agents`
 
-It reports back what each agent built, merges the work, and tells you exactly how to run it.
+It splits the work, runs the agents, merges the result, and tells you exactly how to run it.
 
-### Where the work lands
+### Where the work ends up
 
-- **No remote configured** → merged straight onto your local branch.
-- **Remote + `gh` present** → opened as a **pull request** (it never merges the PR — that's your call).
-- **Want a checkpoint?** Ask for review (`review: true`): it stages the merged, validated work on an integration branch and waits for your go-ahead before landing it.
+- **No git remote?** It merges straight onto your local branch. Done.
+- **Have a remote (+ `gh`)?** It opens a **pull request** — and never merges it. That's your call.
+- **Want to look before it lands?** Ask for review. It stages the merged, validated work on a branch and waits for your go-ahead before finalizing.
 
-> Note: the review checkpoint is honored reliably in Claude Code. Some hosts (e.g. Copilot) may self-approve — for a **guaranteed** human gate, use a remote so the PR is the gate.
+> The review checkpoint held for your approval in both Claude Code and VS Code in testing. Since it relies on your editor's agent honoring the pause, use a **remote** when you want a hard, unbypassable human sign-off — a PR can only be merged by you.
 
 ---
 
-## What it does under the hood (and why it's safe)
+## What happens under the hood (and why it's safe to walk away)
 
-1. **Triage** — an LLM decides split-or-single and carves the plan into file-disjoint tasks.
-2. **Dispatch** — one agent per task, each in its own `git worktree`, running **headless** (no mid-task prompts — you walk away).
-3. **Watchdog** — a hard per-agent timeout + a no-progress detector reap any agent that hangs or loops, so a run never stalls forever.
-4. **Guardrails before merge** — an out-of-lane check (did an agent touch files outside its task?) and your repo's **own validation command** (`typecheck`/`build`/`test`) must pass. A clean git merge isn't enough; the code has to actually work.
-5. **Merge & report** — clean work lands (or becomes a PR); broken work stops for a human.
+1. **Triage** — an LLM decides split-or-single and carves the plan into tasks that touch *different* files.
+2. **Dispatch** — one agent per task, each in its own `git worktree`, running **headless**. No mid-task prompts. That's the whole point — you leave.
+3. **Watchdog** — a hard per-agent timeout plus a no-progress detector kill any agent that hangs or loops. A run can't stall forever waiting on nothing.
+4. **Guardrails before anything merges** — did an agent touch files outside its lane? Does your repo's **own** check (`typecheck` / `build` / `test`) still pass? A clean git merge isn't enough; the code has to actually work.
+5. **Merge & report** — good work lands (or becomes a PR); broken work stops and tells you why.
 
-Kill switch: `summon-agents abort <runId>` (or the `summon_abort` tool) stops a run and cleans up anytime.
+And there's always a kill switch: `summon-agents abort <runId>` (or the `summon_abort` tool) stops a run and cleans up, anytime.
 
-## CLI
+## Also a plain CLI
 
-The same engine is a plain CLI, for hooks or manual use:
+The same engine runs from the terminal — for hooks, scripts, or by hand:
 
 ```bash
-summon-agents run --plan plan.md      # run a plan
+summon-agents run --plan plan.md            # run a plan
 summon-agents run --plan plan.md --review   # hold the merge for your approval
-summon-agents merge <runId>           # finalize a held run
-summon-agents gc                      # reap orphaned worktrees/branches
-summon-agents abort <runId>           # stop and clean up a run
+summon-agents merge <runId>                 # finalize a held run
+summon-agents gc                            # reap orphaned worktrees/branches
+summon-agents abort <runId>                 # stop and clean up a run
 ```
 
 ## License
