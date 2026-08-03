@@ -45,6 +45,9 @@ const noRemoteVcs: Vcs = {
   async pushBranch() {
     return { ok: false };
   },
+  async remoteHasBranch() {
+    return false;
+  },
   async canOpenPr() {
     return false;
   },
@@ -128,6 +131,9 @@ describe("runPipeline (end to end with fakes)", () => {
       async pushBranch() {
         return { ok: true };
       },
+      async remoteHasBranch() {
+        return true;
+      },
       async canOpenPr() {
         return true;
       },
@@ -173,6 +179,9 @@ describe("runPipeline (end to end with fakes)", () => {
         pushed = branch;
         return { ok: true, hint: "https://gitlab.com/o/r/-/merge_requests/new" };
       },
+      async remoteHasBranch() {
+        return true; // established remote; base already exists
+      },
       async canOpenPr() {
         return false; // no gh - the whole point of the push-first path
       },
@@ -209,6 +218,48 @@ describe("runPipeline (end to end with fakes)", () => {
         .catch(() => false),
     ).toBe(false);
     expect(await branchExists(repo, "summon/pipe-push/integration")).toBe(true);
+  });
+
+  it("fresh remote (nothing pushed yet): establishes the base branch, then pushes the work", async () => {
+    const pushes: string[] = [];
+    const freshRemoteVcs: Vcs = {
+      async hasRemote() {
+        return true;
+      },
+      async remoteHasBranch() {
+        return false; // fresh remote - base branch not there yet
+      },
+      async pushBranch(_repo, branch) {
+        pushes.push(branch);
+        return { ok: true };
+      },
+      async canOpenPr() {
+        return false;
+      },
+      async openPr() {
+        return { opened: false };
+      },
+    };
+    const result = await runPipeline(
+      repo,
+      "Build auth and api",
+      {
+        judge: splittingJudge(split2),
+        runner: writingRunner(),
+        vcs: freshRemoteVcs,
+        notifier: silentNotifier(),
+      },
+      { runId: "pipe-fresh", watch: { intervalMs: 50 } },
+    );
+
+    expect(result.status).toBe("completed");
+    // The base branch ("main") is pushed first to establish it, then the work.
+    expect(pushes).toContain("main");
+    expect(pushes).toContain("summon/pipe-fresh/integration");
+    expect(pushes.indexOf("main")).toBeLessThan(
+      pushes.indexOf("summon/pipe-fresh/integration"),
+    );
+    expect(result.pr?.pushedBranch).toBe("summon/pipe-fresh/integration");
   });
 
   it("skips when another run holds the lock (idempotency)", async () => {

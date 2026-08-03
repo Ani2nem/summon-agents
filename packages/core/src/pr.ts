@@ -67,6 +67,15 @@ export class GhVcs implements Vcs {
     return { ok: true, hint: match?.[0] };
   }
 
+  async remoteHasBranch(repoDir: string, branch: string): Promise<boolean> {
+    const res = await execa(
+      "git",
+      ["ls-remote", "--heads", "origin", branch],
+      { cwd: repoDir, reject: false },
+    );
+    return res.exitCode === 0 && res.stdout.trim().length > 0;
+  }
+
   async canOpenPr(repoDir: string): Promise<boolean> {
     const which = await execa("gh", ["--version"], { reject: false });
     if (which.exitCode !== 0) return false;
@@ -141,6 +150,13 @@ export async function landOnRemote(input: {
       reason: "no remote configured",
       manualCommand: manualPrCommand(branch, baseBranch),
     };
+  }
+  // Fresh remote (configured but nothing pushed yet): the PR base branch does not
+  // exist on the remote, so establish it first - otherwise the pushed work branch
+  // has no valid base to open a PR/MR against. Only push the base when it is
+  // ABSENT; never clobber an existing (possibly shared) base branch.
+  if (!(await vcs.remoteHasBranch(repoDir, baseBranch))) {
+    await vcs.pushBranch(repoDir, baseBranch);
   }
   const pushed = await vcs.pushBranch(repoDir, branch);
   if (!pushed.ok) {

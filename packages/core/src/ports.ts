@@ -220,6 +220,11 @@ export interface Vcs {
     repoDir: string,
     branch: string,
   ): Promise<{ ok: boolean; hint?: string }>;
+  /**
+   * True if `branch` exists on the remote. Used to detect a fresh remote (nothing
+   * pushed yet) so the PR base branch can be established before pushing the work.
+   */
+  remoteHasBranch(repoDir: string, branch: string): Promise<boolean>;
   /** True if the PR tool (gh/glab) is installed and authenticated. */
   canOpenPr(repoDir: string): Promise<boolean>;
   /** Open a PR for `branch` (already pushed) against the base, degrading gracefully. */

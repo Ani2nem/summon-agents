@@ -56,6 +56,9 @@ describe("landOnRemote (push-first, gh optional)", () => {
       async pushBranch() {
         return { ok: true, hint: "https://github.com/o/r/pull/new/summon-r1" };
       },
+      async remoteHasBranch() {
+        return true; // base already on the remote (established remote)
+      },
       async canOpenPr() {
         return true;
       },
@@ -107,5 +110,30 @@ describe("landOnRemote (push-first, gh optional)", () => {
     expect(res.opened).toBe(false);
     expect(res.reason).toMatch(/push failed/i);
     expect(res.manualCommand).toContain("git push");
+  });
+
+  it("fresh remote: establishes the base branch before pushing the work", async () => {
+    const pushes: string[] = [];
+    const res = await landOnRemote({
+      ...base,
+      vcs: vcs({
+        async remoteHasBranch() {
+          return false; // nothing pushed to the remote yet
+        },
+        async pushBranch(_repo, branch) {
+          pushes.push(branch);
+          return { ok: true };
+        },
+        async canOpenPr() {
+          return false;
+        },
+      }),
+    });
+    expect(pushes).toContain("main"); // base established on the fresh remote
+    expect(pushes).toContain("summon/r1/integration"); // work pushed
+    expect(pushes.indexOf("main")).toBeLessThan(
+      pushes.indexOf("summon/r1/integration"),
+    ); // base first, so it becomes the PR base / default branch
+    expect(res.pushedBranch).toBe("summon/r1/integration");
   });
 });
