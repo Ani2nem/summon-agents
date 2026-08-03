@@ -188,6 +188,21 @@ describe("runTriage fallback", () => {
     expect(d.mode).toBe("single");
   });
 
+  it("prepends the triage hint for the judge only, never into the plan/wiring", async () => {
+    let seen = "";
+    // Return an invalid decision so runTriage falls back to a single agent whose
+    // instructions are the ORIGINAL plan - proving the hint didn't leak in.
+    const judge = fakeJudge((plan) => {
+      seen = plan;
+      return split([]);
+    });
+    const d = await runTriage(judge, "PLAN", "/repo", "GREENFIELD-HINT-XYZ");
+    expect(seen).toContain("GREENFIELD-HINT-XYZ"); // judge saw the hint
+    expect(seen).toContain("PLAN");
+    expect(d.subtasks[0]!.instructions).toBe("PLAN"); // wiring = original plan
+    expect(d.subtasks[0]!.instructions).not.toContain("GREENFIELD-HINT-XYZ");
+  });
+
   it("passes through a valid split", async () => {
     const judge = fakeJudge(() =>
       split([

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "summon-agents": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "summon-agents-mcp"
+      ],
+      "env": {
+        "SUMMON_AGENT_VENDOR": "claude"
+      }
+    }
+  }
+}

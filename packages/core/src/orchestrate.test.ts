@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ExecAgentRunner } from "./dispatch.js";
-import { finalizeRun, runPipeline } from "./orchestrate.js";
+import { finalizeRun, isGreenfield, runPipeline } from "./orchestrate.js";
 import type {
   AgentRunner,
   Judge,
@@ -278,6 +278,38 @@ describe("runPipeline (end to end with fakes)", () => {
         .then(() => true)
         .catch(() => false),
     ).toBe(true); // now it landed
+  });
+
+  it("isGreenfield: true for an empty repo, false once a root manifest exists", async () => {
+    expect(await isGreenfield(repo)).toBe(true);
+    await fs.writeFile(path.join(repo, "package.json"), "{}\n");
+    expect(await isGreenfield(repo)).toBe(false);
+  });
+
+  it("greenfield: prepends the greenfield note to the judge's triage plan", async () => {
+    let seen = "";
+    const capturingJudge: Judge = {
+      async triage(plan) {
+        seen = plan;
+        return split2;
+      },
+      async resolveConflict() {
+        return false;
+      },
+    };
+    await runPipeline(
+      repo, // makeTempRepo has no package.json -> greenfield
+      "Build auth and api",
+      {
+        judge: capturingJudge,
+        runner: writingRunner(),
+        vcs: noRemoteVcs,
+        notifier: silentNotifier(),
+      },
+      { runId: "pipe-green", watch: { intervalMs: 50 } },
+    );
+    expect(seen).toMatch(/greenfield/i);
+    expect(seen).toContain("Build auth and api"); // original plan still there
   });
 
   it("brake: a single-mode decision runs one agent (no fan-out)", async () => {

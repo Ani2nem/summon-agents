@@ -129,6 +129,7 @@ Rules:
 - COVER THE WHOLE PLAN. Every file the plan says to create or modify must be owned by exactly one subtask's allowedFiles. Never drop a planned change.
 - Shared CODE files that need real edits (an entry point like index.js, a barrel/index, a shared types file, a router that wires features together) are NOT hotspots. Assign such a file - and the wiring work for it - to exactly ONE subtask (typically the task it most depends on), or keep the whole plan as a single agent if the wiring cannot be cleanly assigned. Do not leave wiring unowned.
 - Only put files that need NO real logic edits - manifests, lockfiles, generated schemas - in hotspotFiles.
+- GREENFIELD/EMPTY repos (the plan note will say so): every split lane MUST be a self-contained SUBDIRECTORY that owns everything under it - its own code AND its own package.json/config/lockfile (e.g. "frontend/**", "backend/**"). Do NOT split repository-ROOT setup across lanes: two agents both scaffolding at the root collide. If the plan needs shared repo-root setup (a root workspace/monorepo package.json, root tooling config), either keep the whole plan as a SINGLE agent, or hand that root setup to exactly ONE lane. When the bootstrap is small or the pieces share root scaffolding, prefer "single".
 - Before responding, check: does the union of all subtasks' allowedFiles cover every file the plan mentions? If not, fix the split or use "single".`;
 
 /** Parse the first JSON object out of a model's text response. */
@@ -157,11 +158,17 @@ export function parseTriageResponse(text: string, plan: string): TriageDecision 
  */
 export function agentCommandBuilder(cfg: AgentCliConfig) {
   return (ctx: { subtask: Subtask; runDir: string }): AgentCommand => {
+    // With a lane, keep the agent strictly inside its subtree - including any
+    // scaffolding. Greenfield agents otherwise run `npm init` / `create-vite` at
+    // the worktree ROOT (writing root package.json etc.), which lands outside the
+    // lane and trips the out-of-lane backstop, aborting the whole run.
     const lane =
       ctx.subtask.allowedFiles.length > 0
-        ? `\n\nOnly create or modify these files (stay strictly in this lane):\n${ctx.subtask.allowedFiles
+        ? `\n\nYOUR LANE - create or modify files ONLY within these paths, never at the repository root or in another lane:\n${ctx.subtask.allowedFiles
             .map((f) => `- ${f}`)
-            .join("\n")}`
+            .join(
+              "\n",
+            )}\n\nIf you need to initialize or scaffold (npm init, create-vite, framework or project generators, etc.), do it INSIDE your lane directory - create the directory and run the tool there (e.g. \`mkdir -p <your-lane-dir> && cd <your-lane-dir>\`) or point the generator at that path. Never run a scaffolder at the repository root. Every file you create must live under one of the lane paths above.`
         : "";
     const prompt = `You are implementing ONE task directly in the current working directory (a git worktree). Make the changes here, then commit them with git. Work autonomously - do not ask for confirmation or wait for input.
 

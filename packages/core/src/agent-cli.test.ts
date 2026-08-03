@@ -96,6 +96,33 @@ describe("agentCommandBuilder", () => {
     expect(cmd.args).toContain("--force");
     // must NOT depend on reading a file outside the sandbox
     expect(joined).not.toContain("INSTRUCTIONS.md");
+    // greenfield fix: keep scaffolding inside the lane, never at the repo root
+    expect(joined).toContain("YOUR LANE");
+    expect(joined.toLowerCase()).toContain("repository root");
+    expect(joined.toLowerCase()).toContain("scaffold");
+  });
+
+  it("omits the lane/root restriction for a single agent (empty allowedFiles)", () => {
+    const build = agentCommandBuilder({
+      vendor: "claude",
+      bin: "claude",
+      permissionMode: "bypassPermissions",
+      skipPermissions: false,
+    });
+    const cmd = build({
+      subtask: {
+        slug: "main",
+        title: "Do the whole plan",
+        instructions: "implement everything",
+        allowedFiles: [],
+      },
+      runDir: "/r",
+    });
+    const joined = cmd.args.join(" ");
+    expect(joined).toContain("implement everything");
+    // a single agent owns the whole repo - it MUST be free to touch the root
+    expect(joined).not.toContain("YOUR LANE");
+    expect(joined.toLowerCase()).not.toContain("repository root");
   });
 });
 

@@ -152,10 +152,17 @@ export async function runTriage(
   judge: Judge,
   plan: string,
   repoDir: string,
+  /**
+   * Extra context prepended to the plan for the JUDGE's decision only (e.g. a
+   * greenfield note). It is deliberately NOT passed to normalizeDecision, so it
+   * never leaks into the stored plan or the wiring context appended to lanes.
+   */
+  triageHint?: string,
 ): Promise<TriageDecision> {
+  const judgePlan = triageHint ? `${triageHint}\n\n${plan}` : plan;
   let raw: TriageDecision;
   try {
-    raw = await judge.triage(plan, repoDir);
+    raw = await judge.triage(judgePlan, repoDir);
   } catch (err) {
     return singleDecision(
       plan,

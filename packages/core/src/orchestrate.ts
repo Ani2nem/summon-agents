@@ -5,6 +5,8 @@
 // Everything outward-facing or judgment-based is injected via ports so this same
 // function runs under the CLI (claude Judge), MCP (host model Judge), and tests.
 
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { dispatchDecision, awaitRun, type WatchOptions } from "./dispatch.js";
 import { outOfLaneFiles } from "./decompose.js";
 import {
@@ -36,6 +38,35 @@ import {
 } from "./run.js";
 import { runTriage } from "./triage.js";
 import { changedFilesVsBase, deleteBranch, git } from "./worktree.js";
+
+/** Root project manifests. Their absence means the repo needs scaffolding. */
+const ROOT_MANIFESTS = [
+  "package.json",
+  "pyproject.toml",
+  "go.mod",
+  "Cargo.toml",
+  "Gemfile",
+  "requirements.txt",
+  "pom.xml",
+  "build.gradle",
+] as const;
+
+/** True if the repo has no project manifest at its root - i.e. greenfield. */
+export async function isGreenfield(repoRoot: string): Promise<boolean> {
+  for (const m of ROOT_MANIFESTS) {
+    try {
+      await fs.access(path.join(repoRoot, m));
+      return false;
+    } catch {
+      /* not present */
+    }
+  }
+  return true;
+}
+
+/** Prepended to the triage plan (judge only) when the repo is greenfield. */
+const GREENFIELD_TRIAGE_NOTE =
+  "NOTE: The repository is currently EMPTY / greenfield (no project manifest at the root). Apply the GREENFIELD rules: split only into self-contained subdirectory lanes that each own their own manifest/config, or keep the whole plan as a single agent - never split shared repository-root setup across lanes.";
 
 export interface PipelineResult {
   status: "skipped" | "completed" | "needsHuman" | "awaitingReview";
@@ -101,8 +132,17 @@ export async function runPipeline(
   try {
     let state = await createRun({ repoRoot, plan, baseBranch, runId });
 
-    // Triage + brake.
-    const decision = await runTriage(judge, plan, repoRoot);
+    // Triage + brake. On a greenfield repo, tell the judge so it splits into
+    // self-contained subdirectory lanes instead of lanes that all scaffold at
+    // the shared root (which collide and trip the out-of-lane backstop).
+    const greenfield = await isGreenfield(repoRoot);
+    if (greenfield) notifier.info("greenfield repo: steering split into per-lane subdirectories");
+    const decision = await runTriage(
+      judge,
+      plan,
+      repoRoot,
+      greenfield ? GREENFIELD_TRIAGE_NOTE : undefined,
+    );
     state = { ...state, decision };
     await saveRun(repoRoot, state);
     notifier.info(
