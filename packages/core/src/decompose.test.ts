@@ -23,6 +23,20 @@ describe("matchGlob", () => {
     expect(matchGlob("src/api/x.ts", "src/api/")).toBe(true); // dir prefix
     expect(matchGlob("src/apix.ts", "src/api/")).toBe(false);
   });
+
+  it("treats a bare directory name as owning everything under it", () => {
+    // The greenfield regression: judge emits "frontend" (not "frontend/**").
+    expect(matchGlob("frontend/package.json", "frontend")).toBe(true);
+    expect(matchGlob("frontend/src/main.jsx", "frontend")).toBe(true);
+    expect(matchGlob("frontend", "frontend")).toBe(true); // the dir itself
+    // "./frontend" normalizes to "frontend".
+    expect(matchGlob("frontend/package-lock.json", "./frontend")).toBe(true);
+    // Boundary stays tight: "frontend" must not match a sibling prefix.
+    expect(matchGlob("frontend-utils/x.ts", "frontend")).toBe(false);
+    // A bare path that is really a file still matches exactly.
+    expect(matchGlob("src/index.js", "src/index.js")).toBe(true);
+    expect(matchGlob("src/index.jsx", "src/index.js")).toBe(false);
+  });
 });
 
 describe("fileAllowed", () => {
@@ -56,6 +70,18 @@ describe("outOfLaneFiles (loophole C backstop)", () => {
   it("returns nothing when the lane is undeclared (avoid false positives)", () => {
     const s = sub("auth", []);
     expect(outOfLaneFiles(s, ["anything.ts"])).toEqual([]);
+  });
+
+  it("greenfield: a bare-directory lane owns its own manifest/lockfile", () => {
+    const s = sub("frontend", ["frontend"]);
+    const changed = [
+      "frontend/package.json",
+      "frontend/package-lock.json",
+      "frontend/.oxlintrc.json",
+      "frontend/src/main.jsx",
+      "backend/server.js", // OUT - other lane
+    ];
+    expect(outOfLaneFiles(s, changed)).toEqual(["backend/server.js"]);
   });
 });
 

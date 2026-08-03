@@ -312,6 +312,51 @@ describe("runPipeline (end to end with fakes)", () => {
     expect(seen).toContain("Build auth and api"); // original plan still there
   });
 
+  it("greenfield subdir lanes: files under a bare-directory lane merge (not out-of-lane)", async () => {
+    // Reproduces the report: judge splits into bare "frontend"/"backend" lanes,
+    // each agent scaffolds its own package.json + source inside its dir. Before
+    // the matcher fix, frontend/package.json was flagged as out-of-lane.
+    const bareLanes: TriageDecision = {
+      mode: "split",
+      reason: "frontend + backend",
+      subtasks: [
+        { slug: "frontend", title: "Frontend", instructions: "build frontend", allowedFiles: ["frontend"] },
+        { slug: "backend", title: "Backend", instructions: "build backend", allowedFiles: ["backend"] },
+      ],
+      hotspotFiles: [],
+      preInstall: [],
+    };
+    const scaffolder = new ExecAgentRunner(({ subtask }) => ({
+      command: process.execPath,
+      args: [
+        "-e",
+        `const fs=require("fs");const d="${subtask.slug}";fs.mkdirSync(d+"/src",{recursive:true});fs.writeFileSync(d+"/package.json","{}\\n");fs.writeFileSync(d+"/package-lock.json","{}\\n");fs.writeFileSync(d+"/src/index.js","export const x=1;\\n");`,
+      ],
+    }));
+    const result = await runPipeline(
+      repo,
+      "Build a React frontend and an Express backend",
+      {
+        judge: splittingJudge(bareLanes),
+        runner: scaffolder,
+        vcs: noRemoteVcs,
+        notifier: silentNotifier(),
+      },
+      { runId: "pipe-bare", watch: { intervalMs: 50 } },
+    );
+    expect(result.reason).not.toMatch(/out-of-lane/i);
+    expect(result.status).toBe("completed");
+
+    // Both lanes' files landed on main.
+    const { git } = await import("./worktree.js");
+    await git(repo, ["checkout", "main"]);
+    for (const p of ["frontend/package.json", "backend/package.json"]) {
+      expect(
+        await fs.access(path.join(repo, p)).then(() => true).catch(() => false),
+      ).toBe(true);
+    }
+  });
+
   it("brake: a single-mode decision runs one agent (no fan-out)", async () => {
     const single: TriageDecision = {
       mode: "single",

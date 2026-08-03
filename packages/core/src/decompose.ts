@@ -22,6 +22,13 @@ export function matchGlob(file: string, pattern: string): boolean {
   if (p === f) return true;
   // Directory prefix shorthand: "src/auth/" matches anything under it.
   if (p.endsWith("/")) return f === p.slice(0, -1) || f.startsWith(p);
+  // A bare path with no glob metacharacters names a file OR a directory: "frontend"
+  // matches "frontend" and everything under "frontend/". Without this, a lane
+  // declared as a plain subdirectory (which the judge often emits on greenfield
+  // splits as "frontend"/"backend" rather than "frontend/**") would flag its own
+  // frontend/package.json as out-of-lane. The trailing "/" guard keeps the
+  // boundary tight, so "frontend" does not match "frontend-utils/x".
+  if (!/[*?]/.test(p)) return f.startsWith(p + "/");
   const re = globToRegExp(p);
   return re.test(f);
 }
