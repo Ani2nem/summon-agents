@@ -1,10 +1,14 @@
 // agent-cli.ts - a Judge and AgentRunner backed by a headless coding-agent CLI.
 //
 // This is the default judgment + execution adapter, shared by the CLI and the
-// MCP server. It shells out to an agent CLI (`claude -p` by default, or any
-// binary via SUMMON_AGENT_BIN) - the same way the rest of core shells out to
-// `git`/`gh`. Under the CLI there is no host model, so this is the Judge; the
-// dispatched worker agents also run through this binary.
+// MCP server. It shells out to an agent CLI - the same way the rest of core
+// shells out to `git`/`gh`. Under the CLI there is no host model, so this is the
+// Judge; the dispatched worker agents also run through this binary.
+//
+// The vendor is selectable so that WHO summoned decides WHO does the work:
+// triggered from Claude Code -> `claude` workers, from Cursor -> `cursor-agent`,
+// from Copilot -> `copilot`. `init` bakes SUMMON_AGENT_VENDOR into each host's
+// MCP registration, so the right vendor is picked automatically per editor.
 
 import { execa } from "execa";
 import * as path from "node:path";
@@ -13,46 +17,97 @@ import type { ConflictContext, Judge, TriageDecision } from "./ports.js";
 import { TriageDecisionSchema } from "./ports.js";
 import { singleDecision } from "./triage.js";
 
-/** How to invoke the underlying agent CLI. Overridable via env for other CLIs. */
+/** Which vendor's headless agent CLI runs the triage + worker agents. */
+export type AgentVendor = "claude" | "cursor" | "copilot";
+
+/** How to invoke the underlying agent CLI. */
 export interface AgentCliConfig {
-  /** The agent binary, default "claude". */
+  /** Which vendor profile to use (default "claude"). */
+  vendor: AgentVendor;
+  /** The agent binary (defaults to the vendor's, overridable via SUMMON_AGENT_BIN). */
   bin: string;
-  /** Permission mode flag value, default "bypassPermissions" (fully unattended). */
+  /** Permission mode flag value, default "bypassPermissions" (Claude only). */
   permissionMode: string;
-  /** If set, pass --dangerously-skip-permissions instead (full yolo). */
+  /** If set, request the most permissive / auto-approve mode (full yolo). */
   skipPermissions: boolean;
 }
 
+/**
+ * Per-vendor knowledge: the default binary, how to run one headless auto-approved
+ * prompt, and how to check availability. All three vendors expose a
+ * "run this prompt non-interactively and exit" mode; the flags differ.
+ *
+ * Vendor CLIs move fast, so if a flag drifts on your version, point
+ * SUMMON_AGENT_BIN at a wrapper or a newer binary rather than editing this.
+ */
+interface VendorProfile {
+  bin: string;
+  runArgs: (prompt: string, cfg: AgentCliConfig) => string[];
+  versionArgs: string[];
+}
+
+const VENDORS: Record<AgentVendor, VendorProfile> = {
+  // Claude Code. `-p` is headless print mode; `--permission-mode
+  // bypassPermissions` (or `--dangerously-skip-permissions` for yolo) runs
+  // unattended. This is the verified, default path.
+  claude: {
+    bin: "claude",
+    runArgs: (prompt, cfg) => [
+      "-p",
+      prompt,
+      ...(cfg.skipPermissions
+        ? ["--dangerously-skip-permissions"]
+        : ["--permission-mode", cfg.permissionMode]),
+    ],
+    versionArgs: ["--version"],
+  },
+  // Cursor's headless CLI. `-p` runs non-interactively; `--force` auto-approves
+  // edits/commands, which unattended worktree runs require.
+  cursor: {
+    bin: "cursor-agent",
+    runArgs: (prompt) => ["-p", prompt, "--force"],
+    versionArgs: ["--version"],
+  },
+  // GitHub Copilot CLI (newer / experimental). `-p` prompt, `--allow-all-tools`
+  // for unattended execution.
+  copilot: {
+    bin: "copilot",
+    runArgs: (prompt) => ["-p", prompt, "--allow-all-tools"],
+    versionArgs: ["--version"],
+  },
+};
+
+/** Map a host/vendor string (from env or a host name) to a vendor profile. */
+export function normalizeVendor(v: string | undefined): AgentVendor {
+  switch ((v ?? "").toLowerCase()) {
+    case "cursor":
+    case "cursor-agent":
+      return "cursor";
+    case "copilot":
+    case "github-copilot":
+      return "copilot";
+    default:
+      return "claude";
+  }
+}
+
 export function agentConfigFromEnv(env = process.env): AgentCliConfig {
+  const vendor = normalizeVendor(env.SUMMON_AGENT_VENDOR);
   return {
-    bin: env.SUMMON_AGENT_BIN || "claude",
-    // Fully unattended by default (the agreed design): dispatched agents run in
-    // isolated worktrees and must not stall on mid-task prompts. Override with
+    vendor,
+    // SUMMON_AGENT_BIN wins so any vendor's binary can be swapped without code.
+    bin: env.SUMMON_AGENT_BIN || VENDORS[vendor].bin,
+    // Fully unattended by default (Claude): dispatched agents run in isolated
+    // worktrees and must not stall on mid-task prompts. Override with
     // SUMMON_PERMISSION_MODE (e.g. "acceptEdits") for a more cautious run.
     permissionMode: env.SUMMON_PERMISSION_MODE || "bypassPermissions",
     skipPermissions: env.SUMMON_YOLO === "1",
   };
 }
 
-function permissionArgs(cfg: AgentCliConfig): string[] {
-  return cfg.skipPermissions
-    ? ["--dangerously-skip-permissions"]
-    : ["--permission-mode", cfg.permissionMode];
-}
-
-/**
- * Build the command that runs one agent headlessly in its worktree. It reads its
- * task from the INSTRUCTIONS.md we wrote into the run dir.
- */
-export function claudeCommandBuilder(cfg: AgentCliConfig) {
-  return (ctx: { runDir: string }): AgentCommand => {
-    const instructionsPath = path.join(ctx.runDir, "INSTRUCTIONS.md");
-    const prompt = `Read the task in ${instructionsPath} and implement it. Commit your work when done.`;
-    return {
-      command: cfg.bin,
-      args: ["-p", prompt, ...permissionArgs(cfg)],
-    };
-  };
+/** The args to run one headless, auto-approved prompt through the vendor CLI. */
+export function agentRunArgs(cfg: AgentCliConfig, prompt: string): string[] {
+  return VENDORS[cfg.vendor].runArgs(prompt, cfg);
 }
 
 const TRIAGE_SYSTEM = `You are the planning brain of summon-agents. Given an approved implementation plan, decide whether the work should be split into parallel agents.
@@ -92,13 +147,28 @@ export function parseTriageResponse(text: string, plan: string): TriageDecision 
   }
 }
 
-/** A Judge backed by a headless agent CLI (`claude -p` by default). */
-export function claudeJudge(cfg: AgentCliConfig): Judge {
+/**
+ * Build the command that runs one agent headlessly in its worktree. It reads its
+ * task from the INSTRUCTIONS.md we wrote into the run dir.
+ */
+export function agentCommandBuilder(cfg: AgentCliConfig) {
+  return (ctx: { runDir: string }): AgentCommand => {
+    const instructionsPath = path.join(ctx.runDir, "INSTRUCTIONS.md");
+    const prompt = `Read the task in ${instructionsPath} and implement it. Commit your work when done.`;
+    return {
+      command: cfg.bin,
+      args: agentRunArgs(cfg, prompt),
+    };
+  };
+}
+
+/** A Judge backed by a headless agent CLI (the configured vendor). */
+export function agentJudge(cfg: AgentCliConfig): Judge {
   return {
     async triage(plan: string, repoDir: string): Promise<TriageDecision> {
       const res = await execa(
         cfg.bin,
-        ["-p", `${TRIAGE_SYSTEM}\n\n--- PLAN ---\n${plan}`, ...permissionArgs(cfg)],
+        agentRunArgs(cfg, `${TRIAGE_SYSTEM}\n\n--- PLAN ---\n${plan}`),
         { cwd: repoDir, reject: false },
       );
       if (res.exitCode !== 0) {
@@ -114,7 +184,7 @@ export function claudeJudge(cfg: AgentCliConfig): Judge {
           : `Resolve the git merge conflicts in these files by preserving the intent of BOTH sides: ${ctx.conflictedFiles.join(
               ", ",
             )}. Remove all conflict markers. Do not discard either side's work.`;
-      const res = await execa(cfg.bin, ["-p", task, ...permissionArgs(cfg)], {
+      const res = await execa(cfg.bin, agentRunArgs(cfg, task), {
         cwd: ctx.repoDir,
         reject: false,
       });
@@ -125,6 +195,8 @@ export function claudeJudge(cfg: AgentCliConfig): Judge {
 
 /** True if the configured agent binary is on PATH. */
 export async function agentAvailable(cfg: AgentCliConfig): Promise<boolean> {
-  const res = await execa(cfg.bin, ["--version"], { reject: false });
+  const res = await execa(cfg.bin, VENDORS[cfg.vendor].versionArgs, {
+    reject: false,
+  });
   return res.exitCode === 0;
 }

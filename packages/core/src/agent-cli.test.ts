@@ -1,54 +1,87 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentCommandBuilder,
   agentConfigFromEnv,
-  claudeCommandBuilder,
+  agentRunArgs,
+  normalizeVendor,
   parseTriageResponse,
 } from "./agent-cli.js";
 
 describe("agentConfigFromEnv", () => {
-  it("defaults to unattended (bypassPermissions)", () => {
+  it("defaults to the claude vendor, unattended (bypassPermissions)", () => {
     const cfg = agentConfigFromEnv({} as NodeJS.ProcessEnv);
+    expect(cfg.vendor).toBe("claude");
     expect(cfg.bin).toBe("claude");
     expect(cfg.permissionMode).toBe("bypassPermissions");
     expect(cfg.skipPermissions).toBe(false);
   });
 
-  it("honors env overrides", () => {
+  it("selects the vendor binary from SUMMON_AGENT_VENDOR", () => {
+    const cursor = agentConfigFromEnv({
+      SUMMON_AGENT_VENDOR: "cursor",
+    } as NodeJS.ProcessEnv);
+    expect(cursor.vendor).toBe("cursor");
+    expect(cursor.bin).toBe("cursor-agent");
+
+    const copilot = agentConfigFromEnv({
+      SUMMON_AGENT_VENDOR: "copilot",
+    } as NodeJS.ProcessEnv);
+    expect(copilot.vendor).toBe("copilot");
+    expect(copilot.bin).toBe("copilot");
+  });
+
+  it("lets SUMMON_AGENT_BIN override the vendor's default binary", () => {
     const cfg = agentConfigFromEnv({
-      SUMMON_AGENT_BIN: "cursor-agent",
+      SUMMON_AGENT_VENDOR: "cursor",
+      SUMMON_AGENT_BIN: "/opt/custom/cursor-agent",
       SUMMON_PERMISSION_MODE: "acceptEdits",
       SUMMON_YOLO: "1",
     } as NodeJS.ProcessEnv);
-    expect(cfg.bin).toBe("cursor-agent");
+    expect(cfg.vendor).toBe("cursor");
+    expect(cfg.bin).toBe("/opt/custom/cursor-agent");
     expect(cfg.permissionMode).toBe("acceptEdits");
     expect(cfg.skipPermissions).toBe(true);
   });
+
+  it("falls back to claude for unknown vendors", () => {
+    expect(normalizeVendor("nonsense")).toBe("claude");
+    expect(normalizeVendor(undefined)).toBe("claude");
+    expect(normalizeVendor("cursor-agent")).toBe("cursor");
+    expect(normalizeVendor("github-copilot")).toBe("copilot");
+  });
 });
 
-describe("claudeCommandBuilder", () => {
-  it("points the agent at its INSTRUCTIONS.md and passes permission args", () => {
-    const build = claudeCommandBuilder({
-      bin: "claude",
+describe("agentRunArgs (per-vendor headless flags)", () => {
+  it("claude uses --permission-mode, or the skip flag under yolo", () => {
+    const base = { vendor: "claude" as const, bin: "claude", permissionMode: "bypassPermissions", skipPermissions: false };
+    expect(agentRunArgs(base, "hi")).toEqual(["-p", "hi", "--permission-mode", "bypassPermissions"]);
+    expect(agentRunArgs({ ...base, skipPermissions: true }, "hi")).toEqual(["-p", "hi", "--dangerously-skip-permissions"]);
+  });
+
+  it("cursor uses --force to auto-approve", () => {
+    const cfg = { vendor: "cursor" as const, bin: "cursor-agent", permissionMode: "bypassPermissions", skipPermissions: false };
+    expect(agentRunArgs(cfg, "hi")).toEqual(["-p", "hi", "--force"]);
+  });
+
+  it("copilot uses --allow-all-tools", () => {
+    const cfg = { vendor: "copilot" as const, bin: "copilot", permissionMode: "bypassPermissions", skipPermissions: false };
+    expect(agentRunArgs(cfg, "hi")).toEqual(["-p", "hi", "--allow-all-tools"]);
+  });
+});
+
+describe("agentCommandBuilder", () => {
+  it("points the agent at its INSTRUCTIONS.md with the vendor's args", () => {
+    const build = agentCommandBuilder({
+      vendor: "cursor",
+      bin: "cursor-agent",
       permissionMode: "bypassPermissions",
       skipPermissions: false,
     });
     const cmd = build({ runDir: "/runs/r1/auth" });
-    expect(cmd.command).toBe("claude");
+    expect(cmd.command).toBe("cursor-agent");
     expect(cmd.args).toContain("-p");
     expect(cmd.args.join(" ")).toContain("/runs/r1/auth/INSTRUCTIONS.md");
-    expect(cmd.args).toContain("--permission-mode");
-    expect(cmd.args).toContain("bypassPermissions");
-  });
-
-  it("uses the skip flag when yolo is set", () => {
-    const build = claudeCommandBuilder({
-      bin: "claude",
-      permissionMode: "bypassPermissions",
-      skipPermissions: true,
-    });
-    const cmd = build({ runDir: "/runs/r1/auth" });
-    expect(cmd.args).toContain("--dangerously-skip-permissions");
-    expect(cmd.args).not.toContain("--permission-mode");
+    expect(cmd.args).toContain("--force");
   });
 });
 

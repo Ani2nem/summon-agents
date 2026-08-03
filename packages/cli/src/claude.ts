@@ -6,10 +6,12 @@ import * as fs from "node:fs/promises";
 
 export {
   type AgentCliConfig,
+  type AgentVendor,
   agentConfigFromEnv,
-  claudeCommandBuilder,
-  claudeJudge,
+  agentCommandBuilder,
+  agentJudge,
   agentAvailable,
+  normalizeVendor,
   parseTriageResponse,
 } from "@summon-agents/core";
 

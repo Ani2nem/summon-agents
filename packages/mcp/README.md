@@ -43,7 +43,22 @@ npx -y summon-agents init --host cursor    # Cursor
 npx -y summon-agents init --host copilot   # VS Code (Copilot)
 ```
 
-You'll need **git**, **Node 20+**, and a coding-agent CLI on your PATH — **[Claude Code](https://claude.com/claude-code)** by default (set `SUMMON_AGENT_BIN` to use another).
+### Who does the work
+
+Whoever you summon from runs their own vendor's agents.
+`init` bakes the vendor into the MCP registration, so summoning from Claude Code dispatches **Claude** workers, from Cursor dispatches **Cursor** workers, and from Copilot dispatches **Copilot** workers - each on your own subscription for that tool.
+
+You'll need **git**, **Node 20+**, and the matching agent CLI on your PATH:
+
+| Editor | Workers run on | CLI |
+|---|---|---|
+| Claude Code | Claude | `claude` ([Claude Code](https://claude.com/claude-code)) |
+| Cursor | Cursor | `cursor-agent` (Cursor CLI) |
+| VS Code (Copilot) | Copilot | `copilot` (GitHub Copilot CLI) - experimental |
+
+The worker is a headless CLI, not the editor's chat pane (no editor exposes its in-chat agent to outside tools).
+Override the binary with `SUMMON_AGENT_BIN`, or force a vendor with `SUMMON_AGENT_VENDOR` / `--vendor`.
+Cursor's CLI is solid; Copilot's is newer, so treat it as experimental and verify its headless flags on your version.
 
 ## Use it
 

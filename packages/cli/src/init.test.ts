@@ -59,6 +59,10 @@ describe("runInit (claude-code)", () => {
       await fs.readFile(path.join(dir, ".mcp.json"), "utf8"),
     );
     expect(mcp.mcpServers["summon-agents"].args).toContain("summon-agents-mcp");
+    // Claude Code -> Claude workers.
+    expect(mcp.mcpServers["summon-agents"].env.SUMMON_AGENT_VENDOR).toBe(
+      "claude",
+    );
 
     const gi = await fs.readFile(path.join(dir, ".gitignore"), "utf8");
     expect(gi).toContain(".summon-agents/");
@@ -71,12 +75,23 @@ describe("runInit (claude-code)", () => {
     expect(settingsExists).toBe(false);
   });
 
-  it("uses the VS Code `servers` key for copilot", async () => {
+  it("uses the VS Code `servers` key for copilot, with the copilot vendor", async () => {
     await runInit(dir, "copilot");
     const mcp = JSON.parse(
       await fs.readFile(path.join(dir, ".vscode/mcp.json"), "utf8"),
     );
     expect(mcp.servers["summon-agents"]).toBeTruthy();
+    expect(mcp.servers["summon-agents"].env.SUMMON_AGENT_VENDOR).toBe("copilot");
     expect(mcp.mcpServers).toBeUndefined();
+  });
+
+  it("bakes the cursor vendor into the Cursor MCP config", async () => {
+    await runInit(dir, "cursor");
+    const mcp = JSON.parse(
+      await fs.readFile(path.join(dir, ".cursor/mcp.json"), "utf8"),
+    );
+    expect(mcp.mcpServers["summon-agents"].env.SUMMON_AGENT_VENDOR).toBe(
+      "cursor",
+    );
   });
 });

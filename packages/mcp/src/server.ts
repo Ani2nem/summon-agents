@@ -14,8 +14,8 @@ import {
   GhVcs,
   agentAvailable,
   agentConfigFromEnv,
-  claudeCommandBuilder,
-  claudeJudge,
+  agentCommandBuilder,
+  agentJudge,
   finalizeRun,
   gc,
   loadRun,
@@ -28,7 +28,7 @@ import {
   type RunState,
 } from "@summon-agents/core";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 type TextResult = {
   content: { type: "text"; text: string }[];
@@ -97,7 +97,8 @@ export function createServer(repoRoot: string = process.cwd()): McpServer {
       const cfg = agentConfigFromEnv();
       if (!(await agentAvailable(cfg))) {
         return text(
-          `agent CLI "${cfg.bin}" not found on PATH. Install it or set SUMMON_AGENT_BIN.`,
+          `agent CLI "${cfg.bin}" (vendor: ${cfg.vendor}) not found on PATH. ` +
+            `Install that vendor's CLI, or set SUMMON_AGENT_BIN to a different binary.`,
           true,
         );
       }
@@ -106,8 +107,8 @@ export function createServer(repoRoot: string = process.cwd()): McpServer {
         repoRoot,
         plan,
         {
-          judge: claudeJudge(cfg),
-          runner: new ExecAgentRunner(claudeCommandBuilder(cfg)),
+          judge: agentJudge(cfg),
+          runner: new ExecAgentRunner(agentCommandBuilder(cfg)),
           vcs: new GhVcs(),
           notifier: collectingNotifier(lines),
         },

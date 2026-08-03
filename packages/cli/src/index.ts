@@ -14,8 +14,8 @@ import {
 import {
   agentAvailable,
   agentConfigFromEnv,
-  claudeCommandBuilder,
-  claudeJudge,
+  agentCommandBuilder,
+  agentJudge,
   resolvePlan,
 } from "./claude.js";
 import { readHookPlan } from "./hook.js";
@@ -26,7 +26,7 @@ const program = new Command();
 program
   .name("summon-agents")
   .description("Zero-setup orchestrator for parallel AI coding agents")
-  .version("0.1.0");
+  .version("0.2.0");
 
 program
   .command("run")
@@ -34,12 +34,17 @@ program
   .option("-p, --plan <planOrFile>", "plan text or path to a plan file")
   .option("--from-hook", "read the plan from an editor hook payload on stdin")
   .option("--host <host>", "hook host (claude-code|cursor|copilot)", "claude-code")
+  .option("--vendor <vendor>", "worker agent vendor (claude|cursor|copilot)")
   .option("--yolo", "skip mid-task permission prompts (full autonomy)")
   .option("--review", "hold the merge for your review; finalize with `summon-agents merge <runId>`")
   .option("--timeout <ms>", "hard per-agent timeout in ms")
   .action(async (opts) => {
     const repoRoot = process.cwd();
-    const cfg = agentConfigFromEnv();
+    const cfg = agentConfigFromEnv(
+      opts.vendor
+        ? { ...process.env, SUMMON_AGENT_VENDOR: opts.vendor }
+        : process.env,
+    );
     if (opts.yolo) cfg.skipPermissions = true;
 
     // Resolve the plan: from a hook payload, from --plan, or fail.
@@ -71,8 +76,8 @@ program
       repoRoot,
       plan,
       {
-        judge: claudeJudge(cfg),
-        runner: new ExecAgentRunner(claudeCommandBuilder(cfg)),
+        judge: agentJudge(cfg),
+        runner: new ExecAgentRunner(agentCommandBuilder(cfg)),
         vcs: new GhVcs(),
         notifier,
       },

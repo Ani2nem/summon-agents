@@ -83,6 +83,18 @@ const HOST_FILE: Record<Host, (repoRoot: string) => HostFile> = {
   copilot: copilotPromptFile,
 };
 
+/**
+ * Which vendor's agent CLI the workers should use for a given host. This is the
+ * whole point of per-host init: summon from Cursor -> Cursor workers, from
+ * Copilot -> Copilot workers, from Claude Code -> Claude workers. Baked into the
+ * MCP registration below as SUMMON_AGENT_VENDOR so it is picked automatically.
+ */
+const HOST_VENDOR: Record<Host, string> = {
+  "claude-code": "claude",
+  cursor: "cursor",
+  copilot: "copilot",
+};
+
 /** VS Code uses `servers`; Claude Code and Cursor use `mcpServers`. */
 function mcpConfig(host: Host): { file: string; key: string } {
   if (host === "copilot") return { file: ".vscode/mcp.json", key: "servers" };
@@ -114,12 +126,15 @@ async function registerMcp(repoRoot: string, host: Host): Promise<string> {
   const full = path.join(repoRoot, file);
   const cfg = await readJson(full);
   const servers = (cfg[key] as Record<string, unknown>) ?? {};
-  if (!servers["summon-agents"]) {
-    servers["summon-agents"] = {
-      command: "npx",
-      args: ["-y", "summon-agents-mcp"],
-    };
-  }
+  // Preserve any env the user added (e.g. SUMMON_AGENT_BIN), but always set the
+  // vendor for this host so the correct worker CLI is spawned automatically.
+  const existing = (servers["summon-agents"] as Record<string, unknown>) ?? {};
+  const existingEnv = (existing.env as Record<string, string>) ?? {};
+  servers["summon-agents"] = {
+    command: "npx",
+    args: ["-y", "summon-agents-mcp"],
+    env: { ...existingEnv, SUMMON_AGENT_VENDOR: HOST_VENDOR[host] },
+  };
   cfg[key] = servers;
   await writeJson(full, cfg);
   return full;
@@ -161,10 +176,17 @@ export async function runInit(repoRoot: string, host: string): Promise<void> {
         ? "the summon-agents rule (ask Cursor to \"summon agents\")"
         : "the summon-agents prompt (/summon-agents in Copilot Chat)";
 
+  const workerCli = {
+    "claude-code": "claude (Claude Code CLI)",
+    cursor: "cursor-agent (Cursor CLI)",
+    copilot: "copilot (GitHub Copilot CLI)",
+  }[h];
+
   process.stdout.write(
     "summon-agents: installed.\n" +
       `  trigger: ${trigger.path}\n` +
       `  mcp:     ${mcpPath}\n` +
+      `  workers: ${workerCli} - must be installed and on your PATH\n` +
       `  Plan, then invoke ${invoke} to dispatch the plan to parallel agents.\n`,
   );
 }
