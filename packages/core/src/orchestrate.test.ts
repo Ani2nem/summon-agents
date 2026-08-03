@@ -213,6 +213,31 @@ describe("runPipeline (end to end with fakes)", () => {
     ).toBe(false);
   });
 
+  it("no-op guard: agents that produce nothing report needsHuman, not completed", async () => {
+    // Agents exit 0 but write no files (e.g. a sandboxed CLI that couldn't act).
+    const noopRunner = new ExecAgentRunner(() => ({
+      command: process.execPath,
+      args: ["-e", "process.exit(0)"],
+    }));
+    const result = await runPipeline(
+      repo,
+      "Build auth and api",
+      {
+        judge: splittingJudge(split2),
+        runner: noopRunner,
+        vcs: noRemoteVcs,
+        notifier: silentNotifier(),
+      },
+      { runId: "pipe-noop", watch: { intervalMs: 50 } },
+    );
+    expect(result.status).toBe("needsHuman");
+    expect(result.reason).toMatch(/no file changes/i);
+
+    // Base untouched - nothing landed.
+    const { git } = await import("./worktree.js");
+    await git(repo, ["checkout", "main"]);
+  });
+
   it("review gate: holds the merge on the integration branch, then finalizeRun lands it", async () => {
     const deps = {
       judge: splittingJudge(split2),

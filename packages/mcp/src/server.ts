@@ -28,7 +28,7 @@ import {
   type RunState,
 } from "@summon-agents/core";
 
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 
 type TextResult = {
   content: { type: "text"; text: string }[];

@@ -70,18 +70,32 @@ describe("agentRunArgs (per-vendor headless flags)", () => {
 });
 
 describe("agentCommandBuilder", () => {
-  it("points the agent at its INSTRUCTIONS.md with the vendor's args", () => {
+  it("inlines the task into the prompt (no external file to read) with vendor args", () => {
     const build = agentCommandBuilder({
       vendor: "cursor",
       bin: "cursor-agent",
       permissionMode: "bypassPermissions",
       skipPermissions: false,
     });
-    const cmd = build({ runDir: "/runs/r1/auth" });
+    const cmd = build({
+      subtask: {
+        slug: "auth",
+        title: "Add auth",
+        instructions: "Create src/auth.js exporting login()",
+        allowedFiles: ["src/auth.js"],
+      },
+      runDir: "/runs/r1/auth",
+    });
     expect(cmd.command).toBe("cursor-agent");
     expect(cmd.args).toContain("-p");
-    expect(cmd.args.join(" ")).toContain("/runs/r1/auth/INSTRUCTIONS.md");
+    const joined = cmd.args.join(" ");
+    expect(joined).toContain("Add auth");
+    expect(joined).toContain("Create src/auth.js exporting login()");
+    expect(joined).toContain("src/auth.js"); // the lane
+    expect(joined).toContain("commit"); // told to commit
     expect(cmd.args).toContain("--force");
+    // must NOT depend on reading a file outside the sandbox
+    expect(joined).not.toContain("INSTRUCTIONS.md");
   });
 });
 

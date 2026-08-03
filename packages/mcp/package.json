@@ -1,6 +1,6 @@
 {
   "name": "summon-agents-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "MCP server for summon-agents: dispatch an approved plan to parallel AI coding agents from Claude Code, Cursor, or VS Code.",
   "type": "module",
   "bin": {

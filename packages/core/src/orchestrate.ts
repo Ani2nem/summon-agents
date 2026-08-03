@@ -156,6 +156,7 @@ export async function runPipeline(
     // lane - or clobbered a reserved manifest - is flagged before we merge.
     const bySlug = new Map(decision.subtasks.map((s) => [s.slug, s]));
     const violations: string[] = [];
+    const producedFiles = new Set<string>();
     for (const record of records) {
       await commitAll(record.worktree, `summon: ${record.slug} work`).catch(
         () => false,
@@ -167,6 +168,7 @@ export async function runPipeline(
         baseBranch,
         record.branch,
       );
+      for (const f of changed) producedFiles.add(f);
       const stray = outOfLaneFiles(subtask, changed);
       if (stray.length > 0) {
         violations.push(`${record.slug} edited outside its lane: ${stray.join(", ")}`);
@@ -178,6 +180,22 @@ export async function runPipeline(
         status: "needsHuman",
         runId,
         reason: `out-of-lane edits detected; not merging: ${violations.join("; ")}`,
+        decision,
+      };
+    }
+
+    // No-op guard: every agent can exit 0 having produced nothing (e.g. a
+    // sandboxed CLI that couldn't act, or one that just asked a question). A
+    // clean merge of empty branches + a trivially-passing validation would
+    // otherwise report "completed" on a run that changed nothing. Catch it.
+    if (producedFiles.size === 0) {
+      state = await setRunStatus({ repoRoot, state, status: "needsHuman" });
+      return {
+        status: "needsHuman",
+        runId,
+        reason:
+          "agents produced no file changes - nothing to merge. The worker agent likely could not act; check .summon-agents/runs/" +
+          `${runId}/<slug>/stdout.log for what each agent did.`,
         decision,
       };
     }

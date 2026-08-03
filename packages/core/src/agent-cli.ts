@@ -11,9 +11,8 @@
 // MCP registration, so the right vendor is picked automatically per editor.
 
 import { execa } from "execa";
-import * as path from "node:path";
 import type { AgentCommand } from "./dispatch.js";
-import type { ConflictContext, Judge, TriageDecision } from "./ports.js";
+import type { ConflictContext, Judge, Subtask, TriageDecision } from "./ports.js";
 import { TriageDecisionSchema } from "./ports.js";
 import { singleDecision } from "./triage.js";
 
@@ -148,13 +147,29 @@ export function parseTriageResponse(text: string, plan: string): TriageDecision 
 }
 
 /**
- * Build the command that runs one agent headlessly in its worktree. It reads its
- * task from the INSTRUCTIONS.md we wrote into the run dir.
+ * Build the command that runs one agent headlessly in its worktree.
+ *
+ * The task is embedded directly in the prompt - NOT read from a file. Sandboxed
+ * vendor CLIs (Copilot, Cursor) only allow file access inside their working
+ * directory, so pointing them at an INSTRUCTIONS.md that lives outside the
+ * worktree (in the run dir) silently fails: the agent can't read it, does
+ * nothing, and exits clean. Inlining the task sidesteps that for every vendor.
  */
 export function agentCommandBuilder(cfg: AgentCliConfig) {
-  return (ctx: { runDir: string }): AgentCommand => {
-    const instructionsPath = path.join(ctx.runDir, "INSTRUCTIONS.md");
-    const prompt = `Read the task in ${instructionsPath} and implement it. Commit your work when done.`;
+  return (ctx: { subtask: Subtask; runDir: string }): AgentCommand => {
+    const lane =
+      ctx.subtask.allowedFiles.length > 0
+        ? `\n\nOnly create or modify these files (stay strictly in this lane):\n${ctx.subtask.allowedFiles
+            .map((f) => `- ${f}`)
+            .join("\n")}`
+        : "";
+    const prompt = `You are implementing ONE task directly in the current working directory (a git worktree). Make the changes here, then commit them with git. Work autonomously - do not ask for confirmation or wait for input.
+
+# Task: ${ctx.subtask.title}
+
+${ctx.subtask.instructions}${lane}
+
+When you are done, commit all your changes in this directory with git.`;
     return {
       command: cfg.bin,
       args: agentRunArgs(cfg, prompt),
