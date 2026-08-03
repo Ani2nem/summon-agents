@@ -48,17 +48,19 @@ npx -y summon-agents init --host copilot   # VS Code (Copilot)
 Whoever you summon from runs their own vendor's agents.
 `init` bakes the vendor into the MCP registration, so summoning from Claude Code dispatches **Claude** workers, from Cursor dispatches **Cursor** workers, and from Copilot dispatches **Copilot** workers - each on your own subscription for that tool.
 
-You'll need **git**, **Node 20+**, and the matching agent CLI on your PATH:
+**You must install the matching agent CLI before summoning** - summon-agents shells out to it, so it will not run without it. You'll also need **git** and **Node 20+**.
 
-| Editor | Workers run on | CLI |
+| Editor | Workers run on | Install the CLI (must be on your PATH) |
 |---|---|---|
-| Claude Code | Claude | `claude` ([Claude Code](https://claude.com/claude-code)) |
-| Cursor | Cursor | `cursor-agent` (Cursor CLI) |
-| VS Code (Copilot) | Copilot | `copilot` (GitHub Copilot CLI) - experimental |
+| Claude Code | Claude | [Claude Code](https://claude.com/claude-code) - provides `claude` |
+| Cursor | Cursor | [Cursor CLI](https://cursor.com/cli) - provides `cursor-agent` |
+| VS Code (Copilot) | Copilot | `npm install -g @github/copilot` (Node 22+) - provides `copilot` |
+
+If the CLI is missing you'll get a clear `agent CLI "<x>" (vendor: <y>) not found on PATH` - that's the fix: install that vendor's CLI, then restart the MCP server.
 
 The worker is a headless CLI, not the editor's chat pane (no editor exposes its in-chat agent to outside tools).
 Override the binary with `SUMMON_AGENT_BIN`, or force a vendor with `SUMMON_AGENT_VENDOR` / `--vendor`.
-Cursor's CLI is solid; Copilot's is newer, so treat it as experimental and verify its headless flags on your version.
+Claude's CLI is the smoothest path; Cursor's is solid; Copilot's is newer, so treat it as experimental and verify its headless flags on your version.
 
 ## Use it
 
@@ -67,10 +69,12 @@ Plan your change in the editor like you always do. Then, instead of letting one 
 **Just ask** (your agent calls the tool for you):
 > Use summon_agents to add src/login.js, src/dashboard.js, and src/settings.js — three independent modules.
 
-**Or use the shortcut** (Claude Code):
+**Or use the shortcut** (installed per host):
 > `/summon-agents`
 
 It splits the work, runs the agents, merges the result, and tells you exactly how to run it.
+
+**Host obedience differs.** Claude Code reliably delegates to the tool. Copilot (and to a lesser extent Cursor) will sometimes just implement the plan itself instead of calling `summon_agents`, and it won't infer "the plan" from earlier chat. If that happens, be explicit in one message: *"Call the `summon_agents` tool with this plan: <plan text>. Do NOT edit any files yourself."* Use the editor's **agent mode**, not its plan mode.
 
 ### Where the work ends up
 
