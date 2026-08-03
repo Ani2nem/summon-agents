@@ -17,7 +17,7 @@ import {
   type MergeTarget,
 } from "./merge.js";
 import { integrationBranchName } from "./merge.js";
-import { openPullRequest, preflight } from "./pr.js";
+import { landOnRemote, preflight } from "./pr.js";
 import { installDependencies } from "./validate.js";
 import type {
   AgentRunner,
@@ -327,15 +327,16 @@ export async function finalizeRun(
   const integrationBranch = integrationBranchName(runId);
   const mergedSlugs = decision?.subtasks.map((s) => s.slug) ?? [];
 
-  // Decide where the work lands. If a remote + PR tooling exist, keep the work on
-  // the integration branch and open a PR against base (base stays clean). Otherwise
-  // fast-forward local base onto the integration result and report it as landed.
-  const canPr = (await vcs.hasRemote(repoRoot)) && (await vcs.canOpenPr(repoRoot));
+  // Decide where the work lands. If a remote exists, PUSH the integration branch
+  // (plain git - no PR CLI required) and let the host offer a PR/MR; base stays
+  // clean. Otherwise fast-forward local base onto the integration result and
+  // report it as landed on the branch you were on.
+  const hasRemote = await vcs.hasRemote(repoRoot);
 
   let pr: PrResult;
   let landedOn: string;
-  if (canPr) {
-    pr = await openPullRequest({
+  if (hasRemote) {
+    pr = await landOnRemote({
       repoDir: repoRoot,
       branch: integrationBranch,
       baseBranch,

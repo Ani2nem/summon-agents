@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { PrResult, Vcs } from "./ports.js";
-import { openPullRequest, preflight } from "./pr.js";
+import { landOnRemote, preflight } from "./pr.js";
 import { cleanupTempRepo, makeTempRepo } from "./testkit.js";
 import { hasCommits, isGitRepo } from "./worktree.js";
 
@@ -39,7 +39,7 @@ describe("preflight (git/remote, local + reversible without asking)", () => {
   });
 });
 
-describe("openPullRequest graceful degradation", () => {
+describe("landOnRemote (push-first, gh optional)", () => {
   const base = {
     repoDir: "/repo",
     branch: "summon/r1/integration",
@@ -53,18 +53,21 @@ describe("openPullRequest graceful degradation", () => {
       async hasRemote() {
         return true;
       },
+      async pushBranch() {
+        return { ok: true, hint: "https://github.com/o/r/pull/new/summon-r1" };
+      },
       async canOpenPr() {
         return true;
       },
       async openPr(): Promise<PrResult> {
-        return { opened: true, url: "https://example/pr/1" };
+        return { opened: true, url: "https://example/pr/1", pushedBranch: base.branch };
       },
       ...overrides,
     };
   }
 
   it("returns a manual command when there is no remote", async () => {
-    const res = await openPullRequest({
+    const res = await landOnRemote({
       ...base,
       vcs: vcs({ async hasRemote() {
         return false;
@@ -72,24 +75,37 @@ describe("openPullRequest graceful degradation", () => {
     });
     expect(res.opened).toBe(false);
     expect(res.reason).toMatch(/no remote/i);
-    expect(res.manualCommand).toContain("gh pr create");
+    expect(res.manualCommand).toContain("git push");
   });
 
-  it("returns a manual command when gh is unavailable/unauthenticated", async () => {
-    const res = await openPullRequest({
+  it("opens a PR when a remote + gh are present (after pushing the branch)", async () => {
+    const res = await landOnRemote({ ...base, vcs: vcs({}) });
+    expect(res.opened).toBe(true);
+    expect(res.url).toContain("example");
+  });
+
+  it("without gh: pushes the branch and reports it, no PR CLI required", async () => {
+    const res = await landOnRemote({
       ...base,
       vcs: vcs({ async canOpenPr() {
         return false;
       } }),
     });
     expect(res.opened).toBe(false);
-    expect(res.reason).toMatch(/gh/i);
-    expect(res.manualCommand).toContain("git push");
+    expect(res.pushedBranch).toBe(base.branch);
+    expect(res.reason).toMatch(/pushed/i);
+    expect(res.reason).toContain("pull/new"); // the host's create-PR hint URL
   });
 
-  it("delegates to vcs.openPr when remote + auth are present", async () => {
-    const res = await openPullRequest({ ...base, vcs: vcs({}) });
-    expect(res.opened).toBe(true);
-    expect(res.url).toContain("example");
+  it("degrades to a manual command when the push itself fails", async () => {
+    const res = await landOnRemote({
+      ...base,
+      vcs: vcs({ async pushBranch() {
+        return { ok: false };
+      } }),
+    });
+    expect(res.opened).toBe(false);
+    expect(res.reason).toMatch(/push failed/i);
+    expect(res.manualCommand).toContain("git push");
   });
 });

@@ -191,6 +191,11 @@ export interface PrResult {
   /** URL if opened. */
   url?: string;
   /**
+   * The branch pushed to the remote (set whenever we pushed, whether or not a PR
+   * was also opened). The host will offer to open a PR/MR for it.
+   */
+  pushedBranch?: string;
+  /**
    * If not opened (no remote, no auth), the exact command the user can run to do
    * it themselves. The tool degrades gracefully rather than failing.
    */
@@ -206,9 +211,18 @@ export interface PrResult {
 export interface Vcs {
   /** True if the repo has a push remote configured. */
   hasRemote(repoDir: string): Promise<boolean>;
+  /**
+   * Push `branch` to origin with plain git (no PR tool required). Returns a
+   * create-PR/MR hint URL if the remote printed one. This is the universal path:
+   * any host offers PR/MR creation after a branch is pushed.
+   */
+  pushBranch(
+    repoDir: string,
+    branch: string,
+  ): Promise<{ ok: boolean; hint?: string }>;
   /** True if the PR tool (gh/glab) is installed and authenticated. */
   canOpenPr(repoDir: string): Promise<boolean>;
-  /** Open a PR for `branch` against the base, degrading gracefully. */
+  /** Open a PR for `branch` (already pushed) against the base, degrading gracefully. */
   openPr(input: {
     repoDir: string;
     branch: string;

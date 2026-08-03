@@ -51,6 +51,22 @@ export class GhVcs implements Vcs {
     return res.exitCode === 0 && res.stdout.trim().length > 0;
   }
 
+  async pushBranch(
+    repoDir: string,
+    branch: string,
+  ): Promise<{ ok: boolean; hint?: string }> {
+    const res = await execa("git", ["push", "-u", "origin", branch], {
+      cwd: repoDir,
+      reject: false,
+    });
+    if (res.exitCode !== 0) return { ok: false };
+    // GitHub/GitLab print a "create a pull/merge request" URL on stderr when a
+    // new branch is pushed. Surface it so the user has a one-click link even
+    // without any PR CLI.
+    const match = `${res.stderr}\n${res.stdout}`.match(/https?:\/\/\S+/);
+    return { ok: true, hint: match?.[0] };
+  }
+
   async canOpenPr(repoDir: string): Promise<boolean> {
     const which = await execa("gh", ["--version"], { reject: false });
     if (which.exitCode !== 0) return false;
@@ -61,6 +77,8 @@ export class GhVcs implements Vcs {
     return auth.exitCode === 0;
   }
 
+  // Assumes `branch` is already pushed (landOnRemote pushes first). Opens the PR
+  // only - a convenience for GitHub users who have gh.
   async openPr(input: {
     repoDir: string;
     branch: string;
@@ -69,18 +87,6 @@ export class GhVcs implements Vcs {
     body: string;
   }): Promise<PrResult> {
     const { repoDir, branch, baseBranch, title, body } = input;
-    const push = await execa(
-      "git",
-      ["push", "-u", "origin", branch],
-      { cwd: repoDir, reject: false },
-    );
-    if (push.exitCode !== 0) {
-      return {
-        opened: false,
-        reason: "git push failed",
-        manualCommand: manualPrCommand(branch, baseBranch),
-      };
-    }
     const pr = await execa(
       "gh",
       [
@@ -100,24 +106,27 @@ export class GhVcs implements Vcs {
     if (pr.exitCode !== 0) {
       return {
         opened: false,
-        reason: "gh pr create failed",
+        pushedBranch: branch,
+        reason: `pushed ${branch}; gh pr create failed - open a PR/MR on your remote`,
         manualCommand: manualPrCommand(branch, baseBranch),
       };
     }
-    return { opened: true, url: pr.stdout.trim() };
+    return { opened: true, url: pr.stdout.trim(), pushedBranch: branch };
   }
 }
 
 export function manualPrCommand(branch: string, baseBranch: string): string {
-  return `git push -u origin ${branch} && gh pr create --base ${baseBranch} --head ${branch}`;
+  return `git push -u origin ${branch}  # then open a PR/MR (base: ${baseBranch}) on your remote`;
 }
 
 /**
- * Open a PR for the integration branch, degrading gracefully: if there is no
- * remote or no PR tooling/auth, return the exact manual command instead of
- * failing. Local work already succeeded before this is called.
+ * Land the integration branch on the remote, degrading gracefully. The key move
+ * is PUSH-FIRST with plain git (no PR CLI needed): any host - GitHub, GitLab,
+ * Bitbucket - then offers to open a PR/MR for the pushed branch. If `gh` happens
+ * to be installed we also open the PR for a direct link, but it is never
+ * required. The remote merge button is never touched. Local base stays clean.
  */
-export async function openPullRequest(input: {
+export async function landOnRemote(input: {
   repoDir: string;
   branch: string;
   baseBranch: string;
@@ -133,12 +142,24 @@ export async function openPullRequest(input: {
       manualCommand: manualPrCommand(branch, baseBranch),
     };
   }
-  if (!(await vcs.canOpenPr(repoDir))) {
+  const pushed = await vcs.pushBranch(repoDir, branch);
+  if (!pushed.ok) {
     return {
       opened: false,
-      reason: "gh not installed or not authenticated",
+      reason: "git push failed",
       manualCommand: manualPrCommand(branch, baseBranch),
     };
   }
-  return vcs.openPr(input);
+  // Branch is on the remote. Open a PR via gh if available (nice link),
+  // otherwise just report the pushed branch - the host offers PR/MR creation.
+  if (await vcs.canOpenPr(repoDir)) {
+    return vcs.openPr(input);
+  }
+  return {
+    opened: false,
+    pushedBranch: branch,
+    reason: pushed.hint
+      ? `pushed ${branch} to origin - open a PR/MR: ${pushed.hint}`
+      : `pushed ${branch} to origin - open a PR/MR for it on your remote`,
+  };
 }

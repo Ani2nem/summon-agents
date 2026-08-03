@@ -78,11 +78,11 @@ It splits the work, runs the agents, merges the result, and tells you exactly ho
 
 ### Where the work ends up
 
-- **No git remote?** It merges straight onto your local branch. Done.
-- **Have a remote (+ `gh`)?** It opens a **pull request** — and never merges it. That's your call.
+- **No git remote?** It fast-forwards the branch you're on (your feature branch if you're on one, else `main`). Walk away, come back to finished work in place.
+- **Have a remote?** It **pushes** the branch (plain `git push` — no `gh` needed, works with GitHub, GitLab, or Bitbucket) and your host offers to open a PR/MR. If `gh` happens to be installed, it opens the PR for you and hands back the link. Your local base stays clean, and the remote merge is never automatic.
 - **Want to look before it lands?** Ask for review. It stages the merged, validated work on a branch and waits for your go-ahead before finalizing.
 
-> The review checkpoint waits for your approval — confirmed in both **Claude Code** and **VS Code**. It relies on your editor's agent honoring the pause, so when you want a hard, unbypassable human sign-off, use a **remote**: a PR can only be merged by you, no matter what.
+> The review checkpoint waits for your approval — confirmed in both **Claude Code** and **VS Code**. It relies on your editor's agent honoring the pause, so when you want a hard, unbypassable human sign-off, use a **remote**: a pushed branch / PR can only be merged by you, no matter what.
 
 ---
 
@@ -92,7 +92,7 @@ It splits the work, runs the agents, merges the result, and tells you exactly ho
 2. **Dispatch** — one agent per task, each in its own `git worktree`, running **headless**. No mid-task prompts. That's the whole point — you leave.
 3. **Watchdog** — a hard per-agent timeout plus a no-progress detector kill any agent that hangs or loops. A run can't stall forever waiting on nothing.
 4. **Guardrails before anything merges** — did an agent touch files outside its lane? Does your repo's **own** check (`typecheck` / `build` / `test`) still pass? A clean git merge isn't enough; the code has to actually work.
-5. **Merge & report** — good work lands (or becomes a PR); broken work stops and tells you why.
+5. **Merge & report** — good work lands on your branch (or is pushed to your remote for a PR/MR); broken work stops and tells you why.
 
 And there's always a kill switch: `summon-agents abort <runId>` (or the `summon_abort` tool) stops a run and cleans up, anytime.
 

@@ -37,10 +37,13 @@ function writingRunner(): AgentRunner {
   }));
 }
 
-/** Vcs with no remote - PR degrades to a manual command. */
+/** Vcs with no remote - work fast-forwards onto the local base branch. */
 const noRemoteVcs: Vcs = {
   async hasRemote() {
     return false;
+  },
+  async pushBranch() {
+    return { ok: false };
   },
   async canOpenPr() {
     return false;
@@ -122,6 +125,9 @@ describe("runPipeline (end to end with fakes)", () => {
       async hasRemote() {
         return true;
       },
+      async pushBranch() {
+        return { ok: true };
+      },
       async canOpenPr() {
         return true;
       },
@@ -155,6 +161,54 @@ describe("runPipeline (end to end with fakes)", () => {
         .catch(() => false),
     ).toBe(false);
     expect(await branchExists(repo, "summon/pipe-pr/integration")).toBe(true);
+  });
+
+  it("with a remote but no gh: pushes the integration branch, base stays clean", async () => {
+    let pushed = "";
+    const pushOnlyVcs: Vcs = {
+      async hasRemote() {
+        return true;
+      },
+      async pushBranch(_repo, branch) {
+        pushed = branch;
+        return { ok: true, hint: "https://gitlab.com/o/r/-/merge_requests/new" };
+      },
+      async canOpenPr() {
+        return false; // no gh - the whole point of the push-first path
+      },
+      async openPr() {
+        return { opened: false };
+      },
+    };
+    const result = await runPipeline(
+      repo,
+      "Build auth and api",
+      {
+        judge: splittingJudge(split2),
+        runner: writingRunner(),
+        vcs: pushOnlyVcs,
+        notifier: silentNotifier(),
+      },
+      { runId: "pipe-push", watch: { intervalMs: 50 } },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.pr?.opened).toBe(false);
+    expect(pushed).toBe("summon/pipe-push/integration");
+    expect(result.pr?.pushedBranch).toBe("summon/pipe-push/integration");
+    expect(result.reason).toBe("merged and validated");
+    expect(result.landedOn).toBe("summon/pipe-push/integration");
+
+    // Base stays clean; the work is on the pushed integration branch.
+    const { git, branchExists } = await import("./worktree.js");
+    await git(repo, ["checkout", "main"]);
+    expect(
+      await fs
+        .access(path.join(repo, "src/auth/index.ts"))
+        .then(() => true)
+        .catch(() => false),
+    ).toBe(false);
+    expect(await branchExists(repo, "summon/pipe-push/integration")).toBe(true);
   });
 
   it("skips when another run holds the lock (idempotency)", async () => {
