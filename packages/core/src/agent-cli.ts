@@ -176,7 +176,10 @@ export function agentCommandBuilder(cfg: AgentCliConfig) {
 
 ${ctx.subtask.instructions}${lane}
 
-When you are done, commit all your changes in this directory with git.`;
+## How to work (important)
+- Write the code, then COMMIT it with git as soon as the implementation is complete - commit BEFORE any optional verification, so your work is never lost.
+- Do NOT run heavy or manual verification yourself: no browser / end-to-end testing, no long-running servers (\`npm start\`, dev servers), no large simulation gauntlets. The orchestrator runs the project's own typecheck / build / test on the merged result - that is where validation happens, not here. A quick local sanity check is fine; extensive verification is not your job and it makes the run look stalled.
+- Keep making steady, visible progress. If you finish early, commit and stop rather than polishing indefinitely.`;
     return {
       command: cfg.bin,
       args: agentRunArgs(cfg, prompt),

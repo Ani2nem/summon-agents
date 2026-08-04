@@ -273,9 +273,13 @@ export interface WatchOptions {
   intervalMs?: number;
 }
 
+// Real builds legitimately go quiet: installing deps, running a test suite, or a
+// long model turn produce no worktree file writes and (for `claude -p`) little
+// stdout for minutes at a time. These are deliberately generous so the watchdog
+// only reaps agents that are genuinely stuck, not ones that are just thinking.
 const DEFAULTS: Required<WatchOptions> = {
-  timeoutMs: 15 * 60_000,
-  noProgressMs: 5 * 60_000,
+  timeoutMs: 30 * 60_000, // hard cap
+  noProgressMs: 12 * 60_000, // stalled-mtime threshold
   intervalMs: 1_000,
 };
 
@@ -310,6 +314,10 @@ async function newestActivityMs(
   };
   await consider(path.join(runDirPath, "stdout.log"));
   await consider(path.join(runDirPath, "stderr.log"));
+  // Count dependency-install activity: node_modules is skipped in the scan below
+  // (too big to walk), but its own mtime advances throughout `npm install`, so a
+  // long install still registers as progress.
+  await consider(path.join(worktreeDir, "node_modules"));
   // Shallow scan of the worktree (skip .git / node_modules), two levels deep.
   const scan = async (dir: string, depth: number) => {
     if (depth < 0) return;
