@@ -107,6 +107,8 @@ npx -y summon-agents status    # one-shot snapshot
 
 No run id needed - it defaults to the current run. Each agent shows its state, how long it's been running, how long it's been quiet, and **the files it has changed so far**, so a long build is legible instead of a black box. It's read-only - opening the window never disturbs the run. From your editor's chat you can ask for the same thing via the `summon_status` tool.
 
+This works the same **across every vendor** - Claude, Cursor, or Copilot workers - because it reads the run's git/worktree state, not any vendor's output. The window looks identical no matter who's cooking.
+
 ## Also a plain CLI
 
 The same engine runs from the terminal — for hooks, scripts, or by hand:
@@ -114,6 +116,8 @@ The same engine runs from the terminal — for hooks, scripts, or by hand:
 ```bash
 summon-agents run --plan plan.md            # run a plan
 summon-agents run --plan plan.md --review   # hold the merge for your approval
+summon-agents watch                         # live view of the current run's agents
+summon-agents status                        # one-shot snapshot of the current run
 summon-agents merge <runId>                 # finalize a held run
 summon-agents gc                            # reap orphaned worktrees/branches
 summon-agents abort <runId>                 # stop and clean up a run
