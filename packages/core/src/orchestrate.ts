@@ -101,6 +101,11 @@ export interface PipelineOptions {
    * identical to before.
    */
   review?: boolean;
+  /**
+   * Periodic heartbeat during the cook phase (throttled), for live progress
+   * streaming (e.g. MCP progress notifications, or a CLI heartbeat). Read-only.
+   */
+  onTick?: () => void | Promise<void>;
 }
 
 /** Run the whole thing for an approved plan. Safe to call from a hook. */
@@ -179,6 +184,7 @@ export async function runPipeline(
       records,
       notifier,
       options: options.watch,
+      onTick: options.onTick,
     });
 
     const failed = [...results.values()].filter((r) => r.status === "error");

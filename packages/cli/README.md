@@ -109,6 +109,8 @@ No run id needed - it defaults to the current run. Each agent shows its state, h
 
 This works the same **across every vendor** - Claude, Cursor, or Copilot workers - because it reads the run's git/worktree state, not any vendor's output. The window looks identical no matter who's cooking.
 
+**Without leaving your cockpit:** when you summon from your editor chat, summon-agents also streams the play-by-play back inline via MCP progress notifications (the split, each agent finishing, and a periodic heartbeat with live file counts). Whether it renders live is up to your editor. And when you run it straight from a terminal with `summon-agents run`, that same heartbeat prints in the terminal you're already in - no second window needed.
+
 ## Also a plain CLI
 
 The same engine runs from the terminal — for hooks, scripts, or by hand:

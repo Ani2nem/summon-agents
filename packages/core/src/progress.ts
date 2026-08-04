@@ -126,6 +126,17 @@ export function formatProgress(p: RunProgress): string {
   return lines.join("\n");
 }
 
+/** A single compact line for streaming into a chat / terminal heartbeat. */
+export function formatProgressLine(p: RunProgress): string {
+  if (p.agents.length === 0) return "triaging / spinning up…";
+  const elapsed = Math.max(0, ...p.agents.map((a) => a.elapsedMs));
+  const parts = p.agents.map(
+    (a) =>
+      `${a.slug} ${a.state === "running" ? `${a.changedFiles.length}f` : a.state}`,
+  );
+  return `cooking ${fmtDuration(elapsed)} · ${parts.join(" · ")}`;
+}
+
 /** True while a run is still working (so a live watcher keeps polling). */
 export function runIsActive(p: RunProgress): boolean {
   if (p.status === "dispatched" || p.status === "merging") return true;

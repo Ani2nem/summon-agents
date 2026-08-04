@@ -387,6 +387,8 @@ export async function awaitRun(input: {
   options?: WatchOptions;
   /** Injectable clock for tests. */
   now?: () => number;
+  /** Periodic heartbeat (throttled ~4s) for live progress. Read-only. */
+  onTick?: () => void | Promise<void>;
 }): Promise<Map<string, AgentResult>> {
   const opts = { ...DEFAULTS, ...(input.options ?? {}) };
   const now = input.now ?? (() => Date.now());
@@ -395,6 +397,8 @@ export async function awaitRun(input: {
   for (const r of input.records) {
     lastProgress.set(r.slug, Date.parse(r.startedAt));
   }
+  const tickMs = 4000;
+  let lastTick = 0;
 
   while (results.size < input.records.length) {
     for (const record of input.records) {
@@ -439,7 +443,13 @@ export async function awaitRun(input: {
         input.notifier?.agentDone(synth);
       }
     }
-    if (results.size < input.records.length) await sleep(opts.intervalMs);
+    if (results.size < input.records.length) {
+      if (input.onTick && now() - lastTick >= tickMs) {
+        lastTick = now();
+        await input.onTick();
+      }
+      await sleep(opts.intervalMs);
+    }
   }
 
   return results;

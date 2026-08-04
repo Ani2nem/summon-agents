@@ -6,6 +6,7 @@ import {
   GhVcs,
   collectProgress,
   formatProgress,
+  formatProgressLine,
   gc as gcCore,
   loadRun,
   runIsActive,
@@ -27,7 +28,7 @@ const program = new Command();
 program
   .name("summon-agents")
   .description("Zero-setup orchestrator for parallel AI coding agents")
-  .version("0.4.0");
+  .version("0.4.1");
 
 program
   .command("run")
@@ -85,6 +86,10 @@ program
       {
         watch: opts.timeout ? { timeoutMs: Number(opts.timeout) } : undefined,
         review: Boolean(opts.review),
+        onTick: async () => {
+          const p = await collectProgress(repoRoot);
+          if (p) process.stdout.write(`  … ${formatProgressLine(p)}\n`);
+        },
       },
     );
 

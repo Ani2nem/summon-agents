@@ -18,6 +18,7 @@ import {
   collectProgress,
   finalizeRun,
   formatProgress,
+  formatProgressLine,
   gc,
   loadRun,
   runPipeline,
@@ -28,7 +29,7 @@ import {
   type RunState,
 } from "@summon-agents/core";
 
-const VERSION = "0.4.0";
+const VERSION = "0.4.1";
 
 type TextResult = {
   content: { type: "text"; text: string }[];
@@ -93,7 +94,7 @@ export function createServer(repoRoot: string = process.cwd()): McpServer {
           ),
       },
     },
-    async ({ plan, review }) => {
+    async ({ plan, review }, extra) => {
       const cfg = agentConfigFromEnv();
       if (!(await agentAvailable(cfg))) {
         return text(
@@ -102,7 +103,43 @@ export function createServer(repoRoot: string = process.cwd()): McpServer {
           true,
         );
       }
+
+      // Stream live progress back into the caller's chat via MCP progress
+      // notifications - the split, each agent's completion, and a periodic
+      // heartbeat with live file counts. Only fires if the client asked for
+      // progress (sent a progressToken); otherwise it degrades to the final
+      // report. Whether the editor renders it live is host-dependent.
+      const progressToken = extra?._meta?.progressToken;
+      let seq = 0;
+      const emit = async (message: string): Promise<void> => {
+        if (progressToken === undefined) return;
+        try {
+          await extra.sendNotification({
+            method: "notifications/progress",
+            params: { progressToken, progress: ++seq, message },
+          });
+        } catch {
+          /* client may not support progress; ignore */
+        }
+      };
+
       const lines: string[] = [];
+      const notifier: Notifier = {
+        info: (m: string) => {
+          lines.push(`• ${m}`);
+          void emit(m);
+        },
+        agentDone: (r: AgentResult) => {
+          const mark = r.status === "success" ? "✓" : "✗";
+          lines.push(`  ${mark} ${r.slug}${r.summary ? `: ${r.summary}` : ""}`);
+          void emit(`${mark} ${r.slug}`);
+        },
+        runDone: (_s: RunState, summary: string) => {
+          lines.push(`done - ${summary}`);
+          void emit(`done - ${summary}`);
+        },
+      };
+
       const result = await runPipeline(
         repoRoot,
         plan,
@@ -110,9 +147,15 @@ export function createServer(repoRoot: string = process.cwd()): McpServer {
           judge: agentJudge(cfg),
           runner: new ExecAgentRunner(agentCommandBuilder(cfg)),
           vcs: new GhVcs(),
-          notifier: collectingNotifier(lines),
+          notifier,
         },
-        { review: Boolean(review) },
+        {
+          review: Boolean(review),
+          onTick: async () => {
+            const p = await collectProgress(repoRoot);
+            if (p) await emit(formatProgressLine(p));
+          },
+        },
       );
       return text(formatResult(lines, result), result.status === "needsHuman");
     },
