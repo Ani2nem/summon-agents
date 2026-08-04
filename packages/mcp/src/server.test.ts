@@ -96,12 +96,12 @@ describe("summon-agents MCP server", () => {
           .catch(() => false),
       ).toBe(false);
 
-      // Grab the runId from status and finalize it.
+      // Grab the runId from the live status view ("run <id>  ·  status: …").
       const status = (await client.callTool({
         name: "summon_status",
         arguments: {},
       })) as { content: { text: string }[] };
-      const runId = status.content[0]!.text.split(":")[0]!.trim();
+      const runId = status.content[0]!.text.match(/run (\S+)/)![1]!;
 
       const merged = (await client.callTool({
         name: "summon_merge",

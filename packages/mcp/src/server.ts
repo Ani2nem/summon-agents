@@ -6,7 +6,6 @@
 // with a headless agent CLI as the Judge and worker runner. One shared core,
 // two skins.
 
-import * as fs from "node:fs/promises";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
@@ -16,11 +15,12 @@ import {
   agentConfigFromEnv,
   agentCommandBuilder,
   agentJudge,
+  collectProgress,
   finalizeRun,
+  formatProgress,
   gc,
   loadRun,
   runPipeline,
-  runsRoot,
   setRunStatus,
   type AgentResult,
   type Notifier,
@@ -28,7 +28,7 @@ import {
   type RunState,
 } from "@summon-agents/core";
 
-const VERSION = "0.3.2";
+const VERSION = "0.4.0";
 
 type TextResult = {
   content: { type: "text"; text: string }[];
@@ -141,32 +141,19 @@ export function createServer(repoRoot: string = process.cwd()): McpServer {
   server.registerTool(
     "summon_status",
     {
-      title: "Status of summon-agents runs",
+      title: "Live progress of a summon-agents run",
       description:
-        "Report the status of a specific summon-agents run, or list recent runs if no id is given.",
+        "Open the window on a run: per-agent live progress - state, elapsed time, how long each has been quiet, and the files it has changed so far. Defaults to the latest run if no id is given. Read-only.",
       inputSchema: {
-        runId: z.string().optional().describe("A run id, or omit to list runs."),
+        runId: z
+          .string()
+          .optional()
+          .describe("A run id, or omit for the latest run."),
       },
     },
     async ({ runId }) => {
-      if (runId) {
-        const state = await loadRun(repoRoot, runId);
-        return state
-          ? text(`${state.runId}: ${state.status} (updated ${state.updatedAt})`)
-          : text(`no such run: ${runId}`, true);
-      }
-      let ids: string[] = [];
-      try {
-        ids = await fs.readdir(runsRoot(repoRoot));
-      } catch {
-        return text("no runs yet");
-      }
-      const rows: string[] = [];
-      for (const id of ids.sort().reverse().slice(0, 20)) {
-        const s = await loadRun(repoRoot, id);
-        if (s) rows.push(`${s.runId}: ${s.status}`);
-      }
-      return text(rows.length ? rows.join("\n") : "no runs yet");
+      const p = await collectProgress(repoRoot, runId);
+      return text(p ? formatProgress(p) : "no runs yet");
     },
   );
 

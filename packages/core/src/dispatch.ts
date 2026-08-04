@@ -301,7 +301,7 @@ async function readResult(
 }
 
 /** Newest mtime (ms) across the agent's log files and its worktree (2 levels). */
-async function newestActivityMs(
+export async function newestActivityMs(
   runDirPath: string,
   worktreeDir: string,
 ): Promise<number> {

@@ -169,6 +169,9 @@ export async function runPipeline(
       notifier,
     });
     state = await setRunStatus({ repoRoot, state, status: "dispatched" });
+    notifier.info(
+      "live view while this runs: `npx -y summon-agents watch` (or `summon-agents status`) in this repo",
+    );
 
     const results = await awaitRun({
       repoRoot,

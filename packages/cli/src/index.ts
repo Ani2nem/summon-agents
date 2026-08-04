@@ -4,10 +4,11 @@ import { Command } from "commander";
 import {
   ExecAgentRunner,
   GhVcs,
-  awaitRun,
+  collectProgress,
+  formatProgress,
   gc as gcCore,
-  loadAgents,
   loadRun,
+  runIsActive,
   runPipeline,
   setRunStatus,
 } from "@summon-agents/core";
@@ -26,7 +27,7 @@ const program = new Command();
 program
   .name("summon-agents")
   .description("Zero-setup orchestrator for parallel AI coding agents")
-  .version("0.3.2");
+  .version("0.4.0");
 
 program
   .command("run")
@@ -106,21 +107,42 @@ program
   });
 
 program
-  .command("watch <runId>")
-  .description("Watch an in-flight run until all agents finish")
-  .action(async (runId: string) => {
+  .command("watch [runId]")
+  .description("Open a live window into a run's agents (defaults to the latest run)")
+  .option("--interval <ms>", "refresh interval", "1500")
+  .action(async (runId: string | undefined, opts) => {
     const repoRoot = process.cwd();
-    const records = await loadAgents(repoRoot, runId);
-    if (records.length === 0) {
-      process.stderr.write(`summon-agents: no agents for run ${runId}\n`);
-      process.exit(1);
+    const interval = Math.max(500, Number(opts.interval) || 1500);
+    const clear = () => process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
+    // Read-only: this just displays. The pipeline owns the watchdog/reaping; the
+    // watcher never mutates the run, so it's safe to open and close anytime.
+    for (;;) {
+      const p = await collectProgress(repoRoot, runId);
+      if (!p) {
+        process.stdout.write("summon-agents: no runs found\n");
+        return;
+      }
+      clear();
+      process.stdout.write(formatProgress(p) + "\n");
+      if (!runIsActive(p)) {
+        process.stdout.write(`\n(run finished: ${p.status})\n`);
+        return;
+      }
+      process.stdout.write(
+        `\n… live · refreshing every ${interval}ms · Ctrl-C to close the window (agents keep cooking)\n`,
+      );
+      await new Promise((r) => setTimeout(r, interval));
     }
-    await awaitRun({
-      repoRoot,
-      runId,
-      records,
-      notifier: stdoutNotifier(),
-    });
+  });
+
+program
+  .command("status [runId]")
+  .description("One-shot snapshot of a run's agents (defaults to the latest run)")
+  .action(async (runId: string | undefined) => {
+    const p = await collectProgress(process.cwd(), runId);
+    process.stdout.write(
+      (p ? formatProgress(p) : "summon-agents: no runs found") + "\n",
+    );
   });
 
 program

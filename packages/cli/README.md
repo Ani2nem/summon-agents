@@ -96,6 +96,17 @@ It splits the work, runs the agents, merges the result, and tells you exactly ho
 
 And there's always a kill switch: `summon-agents abort <runId>` (or the `summon_abort` tool) stops a run and cleans up, anytime.
 
+### Open the window (see what the agents are doing)
+
+The agents run headless - the kitchen cooks with the door closed - but you can open the door anytime, from a terminal in the same repo:
+
+```bash
+npx -y summon-agents watch     # live dashboard, refreshes until the run finishes
+npx -y summon-agents status    # one-shot snapshot
+```
+
+No run id needed - it defaults to the current run. Each agent shows its state, how long it's been running, how long it's been quiet, and **the files it has changed so far**, so a long build is legible instead of a black box. It's read-only - opening the window never disturbs the run. From your editor's chat you can ask for the same thing via the `summon_status` tool.
+
 ## Also a plain CLI
 
 The same engine runs from the terminal — for hooks, scripts, or by hand:
