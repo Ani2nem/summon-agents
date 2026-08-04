@@ -2,7 +2,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ExecAgentRunner } from "./dispatch.js";
-import { finalizeRun, isGreenfield, runPipeline } from "./orchestrate.js";
+import {
+  finalizeRun,
+  isGreenfield,
+  runPipeline,
+  shouldPreInstall,
+} from "./orchestrate.js";
 import type {
   AgentRunner,
   Judge,
@@ -460,6 +465,47 @@ describe("runPipeline (end to end with fakes)", () => {
         await fs.access(path.join(repo, p)).then(() => true).catch(() => false),
       ).toBe(true);
     }
+  });
+
+  it("shouldPreInstall: only for a split on a non-greenfield repo", () => {
+    const withDep = (over: Partial<TriageDecision>): TriageDecision => ({
+      ...split2,
+      preInstall: ["express"],
+      ...over,
+    });
+    expect(shouldPreInstall(withDep({}), false)).toBe(true);
+    expect(shouldPreInstall(withDep({}), true)).toBe(false); // greenfield
+    expect(shouldPreInstall(withDep({ mode: "single" }), false)).toBe(false); // single
+    expect(shouldPreInstall(withDep({ preInstall: [] }), false)).toBe(false); // nothing
+  });
+
+  it("greenfield single agent with preInstall: skips root install, merges cleanly", async () => {
+    // Reproduces the merge-abort bug: a single-agent greenfield build whose
+    // decision carries preInstall must NOT `npm install` at the root (that left
+    // untracked manifests that blocked the merge). If the gate were wrong this
+    // would try to hit npm; instead it runs the agent and completes.
+    const single: TriageDecision = {
+      mode: "single",
+      reason: "greenfield, coupled",
+      subtasks: [
+        { slug: "app", title: "App", instructions: "build it", allowedFiles: [] },
+      ],
+      hotspotFiles: [],
+      preInstall: ["express"],
+    };
+    const result = await runPipeline(
+      repo, // makeTempRepo has no package.json -> greenfield
+      "Build the app",
+      {
+        judge: splittingJudge(single),
+        runner: writingRunner(),
+        vcs: noRemoteVcs,
+        notifier: silentNotifier(),
+      },
+      { runId: "pipe-preinstall", watch: { intervalMs: 50 } },
+    );
+    expect(result.status).toBe("completed");
+    expect(result.reason).not.toMatch(/preinstall|install/i);
   });
 
   it("brake: a single-mode decision runs one agent (no fan-out)", async () => {

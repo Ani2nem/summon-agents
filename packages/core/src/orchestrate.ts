@@ -64,6 +64,23 @@ export async function isGreenfield(repoRoot: string): Promise<boolean> {
   return true;
 }
 
+/**
+ * Whether to pre-install shared deps at the repo root before fan-out. ONLY for a
+ * SPLIT on a non-greenfield repo (one that already has a root manifest). Running
+ * it for a single agent is pointless - that agent installs its own deps in its
+ * worktree - and on a greenfield repo `npm install` at the root creates untracked
+ * package.json / lockfile / node_modules that then BLOCK the merge of the agent's
+ * own committed manifest. That is the greenfield merge-abort bug.
+ */
+export function shouldPreInstall(
+  decision: TriageDecision,
+  greenfield: boolean,
+): boolean {
+  return (
+    decision.preInstall.length > 0 && decision.mode === "split" && !greenfield
+  );
+}
+
 /** Prepended to the triage plan (judge only) when the repo is greenfield. */
 const GREENFIELD_TRIAGE_NOTE =
   "NOTE: The repository is currently EMPTY / greenfield (no project manifest at the root). Apply the GREENFIELD rules: split only into self-contained subdirectory lanes that each own their own manifest/config, or keep the whole plan as a single agent - never split shared repository-root setup across lanes.";
@@ -157,8 +174,10 @@ export async function runPipeline(
     );
 
     // Pre-install shared deps once, up front, and commit them to base so every
-    // lane forks from a state that already has them (loophole C).
-    if (decision.preInstall.length > 0) {
+    // lane forks from a state that already has them (loophole C). Gated: skipped
+    // for a single agent (installs its own deps) and for greenfield (a root
+    // install would leave untracked manifests that block the merge).
+    if (shouldPreInstall(decision, greenfield)) {
       notifier.info(`installing shared deps: ${decision.preInstall.join(", ")}`);
       await installDependencies(repoRoot, decision.preInstall);
       await commitTracked(repoRoot, "summon: pre-install shared dependencies");
