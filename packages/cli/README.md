@@ -109,7 +109,16 @@ npx -y summon-agents watch     # live dashboard, refreshes until the run finishe
 npx -y summon-agents status    # one-shot snapshot
 ```
 
-No run id needed - it defaults to the current run. Each agent shows its state, how long it's been running, how long it's been quiet, and **the files it has changed so far**, so a long build is legible instead of a black box. It's read-only - opening the window never disturbs the run. From your editor's chat you can ask for the same thing via the `summon_status` tool.
+No run id needed - it defaults to the current run. Each agent shows its state, how long it's been running, how long it's been quiet, a live **one-line "what it's doing right now,"** and **the files it has changed so far**, plus a header of recent runs - so a long build is legible instead of a black box. It's read-only - opening the window never disturbs the run. From your editor's chat you can ask for the same thing via the `summon_status` tool.
+
+**Open an agent up (and chat with it):** when [tmux](https://github.com/tmux/tmux) is installed, each agent runs in its own tmux session, so you can go deeper:
+
+```bash
+summon-agents open <agent>     # attach to a running agent's live pane…
+                               # …or resume a finished/failed one's session to debug + continue
+```
+
+While it runs, `open` attaches you to the live pane (Ctrl-b d to detach). Once it's done or failed, `open` resumes **that** agent's context in its worktree so you can pick up where it left off. tmux is optional - without it, agents run detached exactly as before (set `SUMMON_DISABLE_TMUX=1` to force that path), and `open` prints the worktree path + the manual resume command.
 
 This works the same **across every vendor** - Claude, Cursor, or Copilot workers - because it reads the run's git/worktree state, not any vendor's output. The window looks identical no matter who's cooking.
 
@@ -124,9 +133,10 @@ summon-agents run --plan plan.md            # run a plan
 summon-agents run --plan plan.md --review   # hold the merge for your approval
 summon-agents watch                         # live view of the current run's agents
 summon-agents status                        # one-shot snapshot of the current run
-summon-agents merge <runId>                 # finalize a held run
-summon-agents gc                            # reap orphaned worktrees/branches
-summon-agents abort <runId>                 # stop and clean up a run
+summon-agents open [agent]                  # attach to / resume-chat an agent (needs tmux)
+summon-agents merge                         # finalize the latest run held for review
+summon-agents gc                            # reap orphaned worktrees/branches/sessions
+summon-agents abort                         # stop and clean up the latest active run
 ```
 
 ## License
