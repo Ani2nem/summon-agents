@@ -198,6 +198,28 @@ export async function loadRun(
 }
 
 /**
+ * The most recent run whose state satisfies `match`, or null if none. Run ids are
+ * timestamp-prefixed, so a lexicographic dir sort is chronological - we scan
+ * newest-first and return the first match.
+ */
+export async function findLatestRun(
+  repoRoot: string,
+  match: (state: RunState) => boolean,
+): Promise<RunState | null> {
+  let ids: string[] = [];
+  try {
+    ids = (await fs.readdir(runsRoot(repoRoot))).sort();
+  } catch {
+    return null;
+  }
+  for (let i = ids.length - 1; i >= 0; i--) {
+    const state = await loadRun(repoRoot, ids[i]!);
+    if (state && match(state)) return state;
+  }
+  return null;
+}
+
+/**
  * Transition a run to a new status. When the status is terminal, cleanup of the
  * run's worktrees and branches runs automatically - this is the single choke
  * point that guarantees no orphans regardless of *why* the run ended.

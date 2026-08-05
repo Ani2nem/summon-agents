@@ -29,6 +29,8 @@ export interface RunProgress {
   runId: string;
   status: string;
   agents: AgentProgress[];
+  /** The most recent runs (newest-first), for at-a-glance context. */
+  recentRuns?: { runId: string; status: string }[];
 }
 
 /** Most recent run id. Run ids are timestamp-prefixed, so sort order is chronological. */
@@ -67,6 +69,7 @@ export async function collectProgress(
   const state = await loadRun(repoRoot, id);
   const records = await loadAgents(repoRoot, id);
   const now = Date.now();
+  const recentRuns = await collectRecentRuns(repoRoot);
 
   const agents: AgentProgress[] = [];
   for (const r of records) {
@@ -94,7 +97,26 @@ export async function collectProgress(
       summary,
     });
   }
-  return { runId: id, status: state?.status ?? "unknown", agents };
+  return { runId: id, status: state?.status ?? "unknown", agents, recentRuns };
+}
+
+/** The ~5 most recent runs (newest-first) as {runId, status}, for at-a-glance context. */
+async function collectRecentRuns(
+  repoRoot: string,
+): Promise<{ runId: string; status: string }[]> {
+  let ids: string[] = [];
+  try {
+    ids = (await fs.readdir(runsRoot(repoRoot))).sort();
+  } catch {
+    return [];
+  }
+  const recent = ids.slice(-5).reverse();
+  const out: { runId: string; status: string }[] = [];
+  for (const rid of recent) {
+    const s = await loadRun(repoRoot, rid);
+    out.push({ runId: rid, status: s?.status ?? "unknown" });
+  }
+  return out;
 }
 
 function fmtDuration(ms: number): string {
@@ -106,7 +128,16 @@ function fmtDuration(ms: number): string {
 /** Render a compact, human dashboard of a run's agents. */
 export function formatProgress(p: RunProgress): string {
   const mark = (s: string) => (s === "done" ? "✓" : s === "failed" ? "✗" : "●");
-  const lines: string[] = [`run ${p.runId}  ·  status: ${p.status}`];
+  const lines: string[] = [];
+  if (p.recentRuns && p.recentRuns.length > 0) {
+    lines.push("recent runs:");
+    for (const r of p.recentRuns) {
+      const active = r.runId === p.runId ? " ← active" : "";
+      lines.push(`  ${r.runId}  ·  ${r.status}${active}`);
+    }
+    lines.push("");
+  }
+  lines.push(`run ${p.runId}  ·  status: ${p.status}`);
   if (p.agents.length === 0) {
     lines.push("  (no agents yet - triaging / spinning up)");
     return lines.join("\n");

@@ -67,4 +67,25 @@ describe("collectProgress (read-only observability)", () => {
     expect(await collectProgress(repo)).toBeNull();
     expect(await latestRunId(repo)).toBeNull();
   });
+
+  it("surfaces recent runs and formatProgress renders them", async () => {
+    await createRun({ repoRoot: repo, plan: "p", baseBranch: "main", runId: "2026-01-01-old" });
+    await createRun({ repoRoot: repo, plan: "p", baseBranch: "main", runId: "2026-01-02-new" });
+
+    const p = await collectProgress(repo);
+    expect(p).not.toBeNull();
+    expect(p!.recentRuns).toBeDefined();
+    // Newest-first, active run first.
+    expect(p!.recentRuns!.map((r) => r.runId)).toEqual([
+      "2026-01-02-new",
+      "2026-01-01-old",
+    ]);
+    expect(p!.recentRuns![0]!.status).toBe("created");
+
+    const out = formatProgress(p!);
+    expect(out).toContain("recent runs:");
+    expect(out).toContain("2026-01-02-new");
+    expect(out).toContain("2026-01-01-old");
+    expect(out).toContain("← active");
+  });
 });
