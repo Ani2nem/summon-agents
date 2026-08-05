@@ -17,9 +17,11 @@ import {
   agentJudge,
   collectProgress,
   finalizeRun,
+  findLatestRun,
   formatProgress,
   formatProgressLine,
   gc,
+  isTerminal,
   loadRun,
   runPipeline,
   setRunStatus,
@@ -221,16 +223,25 @@ export function createServer(repoRoot: string = process.cwd()): McpServer {
     {
       title: "Abort a summon-agents run",
       description:
-        "Abort a run and clean up its worktrees and branches.",
+        "Abort a run and clean up its worktrees and branches. Defaults to the latest active run if no id is given.",
       inputSchema: {
-        runId: z.string().describe("The run id to abort."),
+        runId: z
+          .string()
+          .optional()
+          .describe("The run id to abort, or omit for the latest active run."),
       },
     },
     async ({ runId }) => {
-      const state = await loadRun(repoRoot, runId);
-      if (!state) return text(`no such run: ${runId}`, true);
+      let state: RunState | null;
+      if (runId) {
+        state = await loadRun(repoRoot, runId);
+        if (!state) return text(`no such run: ${runId}`, true);
+      } else {
+        state = await findLatestRun(repoRoot, (s) => !isTerminal(s.status));
+        if (!state) return text("no active run", true);
+      }
       await setRunStatus({ repoRoot, state, status: "aborted" });
-      return text(`aborted ${runId}`);
+      return text(`aborted ${state.runId}`);
     },
   );
 

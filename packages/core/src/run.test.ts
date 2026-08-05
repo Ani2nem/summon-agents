@@ -7,6 +7,7 @@ import {
   branchNameFor,
   cleanupRun,
   createRun,
+  findLatestRun,
   gc,
   loadRun,
   newRunId,
@@ -60,6 +61,60 @@ describe("run state + branch naming", () => {
     const b = newRunId();
     expect(a).not.toBe(b);
     expect(a).not.toMatch(/[:.]/);
+  });
+});
+
+describe("findLatestRun", () => {
+  let repo: string;
+  beforeEach(async () => {
+    repo = await makeTempRepo();
+  });
+  afterEach(async () => {
+    await cleanupTempRepo(repo);
+  });
+
+  async function seed(runId: string, status: import("./ports.js").RunStatus) {
+    const state = await createRun({
+      repoRoot: repo,
+      plan: "p",
+      baseBranch: "main",
+      runId,
+    });
+    if (status !== "created") {
+      await setRunStatus({ repoRoot: repo, state, status });
+    }
+    return state;
+  }
+
+  it("returns null when no run matches", async () => {
+    await seed("2026-01-01-a", "created");
+    expect(
+      await findLatestRun(repo, (s) => s.status === "awaitingReview"),
+    ).toBeNull();
+    // and null when there are no runs at all
+    const empty = await makeTempRepo();
+    expect(await findLatestRun(empty, () => true)).toBeNull();
+    await cleanupTempRepo(empty);
+  });
+
+  it("returns the most recent run satisfying the predicate", async () => {
+    // Timestamp-prefixed ids sort chronologically.
+    await seed("2026-01-01-a", "awaitingReview");
+    await seed("2026-01-02-b", "completed");
+    await seed("2026-01-03-c", "awaitingReview");
+    await seed("2026-01-04-d", "completed");
+
+    const review = await findLatestRun(
+      repo,
+      (s) => s.status === "awaitingReview",
+    );
+    expect(review?.runId).toBe("2026-01-03-c");
+
+    const active = await findLatestRun(
+      repo,
+      (s) => s.status !== "completed" && s.status !== "aborted",
+    );
+    expect(active?.runId).toBe("2026-01-03-c");
   });
 });
 
