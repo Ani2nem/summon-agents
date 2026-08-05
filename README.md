@@ -41,6 +41,7 @@ One command sets up your editor:
 npx -y summon-agents init                 # Claude Code
 npx -y summon-agents init --host cursor    # Cursor
 npx -y summon-agents init --host copilot   # VS Code (Copilot)
+npx -y summon-agents init --host codex     # OpenAI Codex
 ```
 
 ### Who does the work
@@ -55,6 +56,9 @@ Whoever you summon from runs their own vendor's agents.
 | Claude Code | Claude | [Claude Code](https://claude.com/claude-code) - provides `claude` |
 | Cursor | Cursor | [Cursor CLI](https://cursor.com/cli) - provides `cursor-agent` |
 | VS Code (Copilot) | Copilot | `npm install -g @github/copilot` (Node 22+) - provides `copilot` |
+| OpenAI Codex | Codex | [Codex CLI](https://developers.openai.com/codex/cli) - provides `codex` |
+
+Codex is also selectable as a worker from any host via `--vendor codex` / `SUMMON_AGENT_VENDOR=codex`. (Codex registers its MCP server in `~/.codex/config.toml`; that path is experimental - verify against your Codex version.)
 
 If the CLI is missing you'll get a clear `agent CLI "<x>" (vendor: <y>) not found on PATH` - that's the fix: install that vendor's CLI, then restart the MCP server.
 

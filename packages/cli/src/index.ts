@@ -29,13 +29,13 @@ const program = new Command();
 program
   .name("summon-agents")
   .description("Zero-setup orchestrator for parallel AI coding agents")
-  .version("0.4.2");
+  .version("0.5.0");
 
 program
   .command("run")
   .description("Run the pipeline for an approved plan")
   .option("-p, --plan <planOrFile>", "plan text or path to a plan file")
-  .option("--vendor <vendor>", "worker agent vendor (claude|cursor|copilot)")
+  .option("--vendor <vendor>", "worker agent vendor (claude|cursor|copilot|codex)")
   .option("--review", "hold the merge for your review; finalize with `summon-agents merge <runId>`")
   .option("--timeout <ms>", "hard per-agent timeout in ms")
   .action(async (opts) => {
@@ -191,7 +191,7 @@ program
 program
   .command("init")
   .description("Install the /summon-agents trigger + MCP registration")
-  .option("--host <host>", "claude-code | cursor | copilot", "claude-code")
+  .option("--host <host>", "claude-code | cursor | copilot | codex", "claude-code")
   .action(async (opts) => {
     const { runInit } = await import("./init.js");
     await runInit(process.cwd(), opts.host);
