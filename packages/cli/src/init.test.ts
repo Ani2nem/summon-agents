@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   TRIGGER_BODY,
   claudeCommandFile,
+  codexPromptFile,
   copilotPromptFile,
   cursorRuleFile,
   runInit,
@@ -18,7 +19,12 @@ describe("shared trigger body (vendor-agnostic)", () => {
   });
 
   it("every host wraps the SAME body (only format differs)", () => {
-    for (const f of [claudeCommandFile, cursorRuleFile, copilotPromptFile]) {
+    for (const f of [
+      claudeCommandFile,
+      cursorRuleFile,
+      copilotPromptFile,
+      codexPromptFile,
+    ]) {
       expect(f("/repo").contents).toContain(TRIGGER_BODY);
     }
   });
@@ -32,6 +38,9 @@ describe("shared trigger body (vendor-agnostic)", () => {
     );
     expect(copilotPromptFile("/repo").path).toBe(
       "/repo/.github/prompts/summon-agents.prompt.md",
+    );
+    expect(codexPromptFile("/repo").path).toBe(
+      "/repo/.codex/prompts/summon-agents.md",
     );
   });
 });
@@ -93,5 +102,35 @@ describe("runInit (claude-code)", () => {
     expect(mcp.mcpServers["summon-agents"].env.SUMMON_AGENT_VENDOR).toBe(
       "cursor",
     );
+  });
+
+  it("writes the codex trigger and registers the MCP server in CODEX_HOME toml", async () => {
+    const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "summon-codex-"));
+    const prev = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    try {
+      await runInit(dir, "codex");
+
+      const trigger = await fs.readFile(
+        path.join(dir, ".codex/prompts/summon-agents.md"),
+        "utf8",
+      );
+      expect(trigger).toContain("summon_agents");
+
+      const toml = await fs.readFile(
+        path.join(codexHome, "config.toml"),
+        "utf8",
+      );
+      expect(toml).toContain("[mcp_servers.summon-agents]");
+      expect(toml).toContain('command = "npx"');
+      expect(toml).toContain('SUMMON_AGENT_VENDOR = "codex"');
+
+      const gi = await fs.readFile(path.join(dir, ".gitignore"), "utf8");
+      expect(gi).toContain(".summon-agents/");
+    } finally {
+      if (prev === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = prev;
+      await fs.rm(codexHome, { recursive: true, force: true });
+    }
   });
 });

@@ -28,6 +28,12 @@ describe("agentConfigFromEnv", () => {
     } as NodeJS.ProcessEnv);
     expect(copilot.vendor).toBe("copilot");
     expect(copilot.bin).toBe("copilot");
+
+    const codex = agentConfigFromEnv({
+      SUMMON_AGENT_VENDOR: "codex",
+    } as NodeJS.ProcessEnv);
+    expect(codex.vendor).toBe("codex");
+    expect(codex.bin).toBe("codex");
   });
 
   it("lets SUMMON_AGENT_BIN override the vendor's default binary", () => {
@@ -48,6 +54,8 @@ describe("agentConfigFromEnv", () => {
     expect(normalizeVendor(undefined)).toBe("claude");
     expect(normalizeVendor("cursor-agent")).toBe("cursor");
     expect(normalizeVendor("github-copilot")).toBe("copilot");
+    expect(normalizeVendor("codex")).toBe("codex");
+    expect(normalizeVendor("openai")).toBe("codex");
   });
 });
 
@@ -66,6 +74,11 @@ describe("agentRunArgs (per-vendor headless flags)", () => {
   it("copilot uses --allow-all-tools", () => {
     const cfg = { vendor: "copilot" as const, bin: "copilot", permissionMode: "bypassPermissions", skipPermissions: false };
     expect(agentRunArgs(cfg, "hi")).toEqual(["-p", "hi", "--allow-all-tools"]);
+  });
+
+  it("codex uses `exec` with the bypass flag", () => {
+    const cfg = { vendor: "codex" as const, bin: "codex", permissionMode: "bypassPermissions", skipPermissions: false };
+    expect(agentRunArgs(cfg, "hi")).toEqual(["exec", "hi", "--dangerously-bypass-approvals-and-sandbox"]);
   });
 });
 

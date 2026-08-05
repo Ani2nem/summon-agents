@@ -17,7 +17,7 @@ import { TriageDecisionSchema } from "./ports.js";
 import { singleDecision } from "./triage.js";
 
 /** Which vendor's headless agent CLI runs the triage + worker agents. */
-export type AgentVendor = "claude" | "cursor" | "copilot";
+export type AgentVendor = "claude" | "cursor" | "copilot" | "codex";
 
 /** How to invoke the underlying agent CLI. */
 export interface AgentCliConfig {
@@ -74,6 +74,19 @@ const VENDORS: Record<AgentVendor, VendorProfile> = {
     runArgs: (prompt) => ["-p", prompt, "--allow-all-tools"],
     versionArgs: ["--version"],
   },
+  // OpenAI Codex CLI. Headless mode is `codex exec "<prompt>"`;
+  // `--dangerously-bypass-approvals-and-sandbox` gives full autonomy including
+  // network access (safe here because workers run in isolated worktrees). Note:
+  // `codex exec` streams its progress to stderr.
+  codex: {
+    bin: "codex",
+    runArgs: (prompt) => [
+      "exec",
+      prompt,
+      "--dangerously-bypass-approvals-and-sandbox",
+    ],
+    versionArgs: ["--version"],
+  },
 };
 
 /** Map a host/vendor string (from env or a host name) to a vendor profile. */
@@ -85,6 +98,9 @@ export function normalizeVendor(v: string | undefined): AgentVendor {
     case "copilot":
     case "github-copilot":
       return "copilot";
+    case "codex":
+    case "openai":
+      return "codex";
     default:
       return "claude";
   }
