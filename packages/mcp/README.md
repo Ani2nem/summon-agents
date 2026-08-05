@@ -120,6 +120,8 @@ summon-agents open <agent>     # attach to a running agent's live pane…
 
 While it runs, `open` attaches you to the live pane (Ctrl-b d to detach). Once it's done or failed, `open` resumes **that** agent's context in its worktree so you can pick up where it left off. tmux is optional - without it, agents run detached exactly as before (set `SUMMON_DISABLE_TMUX=1` to force that path), and `open` prints the worktree path + the manual resume command.
 
+**Want to steer them live?** By default agents run unattended (you watch, and resume-to-chat after). Add `--attended` (`summon-agents run --plan plan.md --attended`, requires tmux) to run the agents **interactively** instead: attach with `open`, jump in and redirect them mid-task, then exit an agent when you're happy and the pipeline merges its work. This trades away the "walk away" guarantee on purpose - it's for when you want your hands on the wheel.
+
 This works the same **across every vendor** - Claude, Cursor, or Copilot workers - because it reads the run's git/worktree state, not any vendor's output. The window looks identical no matter who's cooking.
 
 **Without leaving your cockpit:** when you summon from your editor chat, summon-agents also streams the play-by-play back inline via MCP progress notifications (the split, each agent finishing, and a periodic heartbeat with live file counts). Whether it renders live is up to your editor. And when you run it straight from a terminal with `summon-agents run`, that same heartbeat prints in the terminal you're already in - no second window needed.
@@ -131,6 +133,7 @@ The same engine runs from the terminal — for hooks, scripts, or by hand:
 ```bash
 summon-agents run --plan plan.md            # run a plan
 summon-agents run --plan plan.md --review   # hold the merge for your approval
+summon-agents run --plan plan.md --attended # run agents interactively so you can steer them (needs tmux)
 summon-agents watch                         # live view of the current run's agents
 summon-agents status                        # one-shot snapshot of the current run
 summon-agents open [agent]                  # attach to / resume-chat an agent (needs tmux)
