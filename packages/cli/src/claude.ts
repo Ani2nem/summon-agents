@@ -9,6 +9,7 @@ export {
   type AgentVendor,
   agentConfigFromEnv,
   agentCommandBuilder,
+  agentInteractiveCommandBuilder,
   agentJudge,
   agentAvailable,
   normalizeVendor,

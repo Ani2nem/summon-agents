@@ -28,6 +28,7 @@ import {
   agentAvailable,
   agentConfigFromEnv,
   agentCommandBuilder,
+  agentInteractiveCommandBuilder,
   agentJudge,
   parseSessionId,
   resolvePlan,
@@ -48,6 +49,7 @@ program
   .option("-p, --plan <planOrFile>", "plan text or path to a plan file")
   .option("--vendor <vendor>", "worker agent vendor (claude|cursor|copilot|codex)")
   .option("--review", "hold the merge for your review; finalize with `summon-agents merge <runId>`")
+  .option("--attended", "run agents interactively so you can attach and steer them (requires tmux)")
   .option("--timeout <ms>", "hard per-agent timeout in ms")
   .action(async (opts) => {
     const repoRoot = process.cwd();
@@ -80,13 +82,18 @@ program
       plan,
       {
         judge: agentJudge(cfg),
-        runner: new ExecAgentRunner(agentCommandBuilder(cfg)),
+        runner: new ExecAgentRunner(
+          opts.attended
+            ? agentInteractiveCommandBuilder(cfg)
+            : agentCommandBuilder(cfg),
+        ),
         vcs: new GhVcs(),
         notifier,
       },
       {
         watch: opts.timeout ? { timeoutMs: Number(opts.timeout) } : undefined,
         review: Boolean(opts.review),
+        attended: Boolean(opts.attended),
         onTick: async () => {
           const p = await collectProgress(repoRoot);
           if (p) process.stdout.write(`  … ${formatProgressLine(p)}\n`);
