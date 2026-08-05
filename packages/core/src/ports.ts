@@ -72,10 +72,17 @@ export type AgentResult = z.infer<typeof AgentResultSchema>;
 /** Bookkeeping for one launched agent process (persisted to agents.json). */
 export const AgentRecordSchema = z.object({
   slug: z.string().min(1),
-  pid: z.number().int().positive(),
+  // 0 on the tmux launch path (no meaningful trampoline pid; the session is the
+  // handle instead). Positive on the detached-spawn fallback.
+  pid: z.number().int().nonnegative(),
   branch: z.string().min(1),
   worktree: z.string().min(1),
   startedAt: z.string(), // ISO 8601, also guards against PID reuse
+  /**
+   * The tmux session this agent runs in, when tmux is available. Absent on the
+   * detached-spawn fallback path, in which case supervision reaps by `pid`.
+   */
+  tmuxSession: z.string().optional(),
 });
 export type AgentRecord = z.infer<typeof AgentRecordSchema>;
 
@@ -168,6 +175,8 @@ export interface Judge {
 export interface AgentHandle {
   slug: string;
   pid: number;
+  /** The tmux session it runs in, when launched under tmux. */
+  tmuxSession?: string;
 }
 
 /**
@@ -182,6 +191,8 @@ export interface AgentRunner {
     worktreeDir: string;
     /** Where the agent must write stdout.log / stderr.log / result.json. */
     runDir: string;
+    /** The run this agent belongs to, used to name its tmux session. */
+    runId?: string;
   }): Promise<AgentHandle>;
 }
 

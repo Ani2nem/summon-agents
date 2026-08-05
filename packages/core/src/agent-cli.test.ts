@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  type AgentCliConfig,
   agentCommandBuilder,
   agentConfigFromEnv,
   agentRunArgs,
   normalizeVendor,
+  parseSessionId,
   parseTriageResponse,
+  resumeCommand,
 } from "./agent-cli.js";
 
 describe("agentConfigFromEnv", () => {
@@ -136,6 +139,83 @@ describe("agentCommandBuilder", () => {
     // a single agent owns the whole repo - it MUST be free to touch the root
     expect(joined).not.toContain("YOUR LANE");
     expect(joined.toLowerCase()).not.toContain("repository root");
+  });
+});
+
+describe("resumeCommand (per-vendor resume flags)", () => {
+  const cfg = (vendor: AgentCliConfig["vendor"], bin: string): AgentCliConfig => ({
+    vendor,
+    bin,
+    permissionMode: "bypassPermissions",
+    skipPermissions: false,
+  });
+
+  it("claude uses `--resume <id>`", () => {
+    expect(resumeCommand(cfg("claude", "claude"), "sid")).toEqual({
+      command: "claude",
+      args: ["--resume", "sid"],
+    });
+  });
+
+  it("cursor uses `--resume=<id>`", () => {
+    expect(resumeCommand(cfg("cursor", "cursor-agent"), "sid")).toEqual({
+      command: "cursor-agent",
+      args: ["--resume=sid"],
+    });
+  });
+
+  it("copilot uses `--resume=<id>`", () => {
+    expect(resumeCommand(cfg("copilot", "copilot"), "sid")).toEqual({
+      command: "copilot",
+      args: ["--resume=sid"],
+    });
+  });
+
+  it("codex uses `exec resume <id>`", () => {
+    expect(resumeCommand(cfg("codex", "codex"), "sid")).toEqual({
+      command: "codex",
+      args: ["exec", "resume", "sid"],
+    });
+  });
+
+  it("honors a custom bin", () => {
+    expect(resumeCommand(cfg("cursor", "/opt/x"), "sid").command).toBe("/opt/x");
+  });
+});
+
+describe("parseSessionId (best-effort from captured log)", () => {
+  it("cursor lifts the id out of a `--resume=<id>` line", () => {
+    const log = "...\nResume this later with: cursor-agent --resume=ses_ABC123\n";
+    expect(parseSessionId("cursor", log)).toBe("ses_ABC123");
+  });
+
+  it("cursor handles the space form `--resume <id>`", () => {
+    expect(parseSessionId("cursor", "copilot --resume abc-def-123 more")).toBe(
+      "abc-def-123",
+    );
+  });
+
+  it("copilot lifts the id out of a `--resume=<id>` line", () => {
+    const log = "session saved. reopen: copilot --resume=01H9XYZ\n";
+    expect(parseSessionId("copilot", log)).toBe("01H9XYZ");
+  });
+
+  it("cursor/copilot return undefined when no resume hint is present", () => {
+    expect(parseSessionId("cursor", "no hint here")).toBeUndefined();
+    expect(parseSessionId("copilot", "")).toBeUndefined();
+  });
+
+  it("codex (experimental) matches a labeled session/thread id", () => {
+    expect(
+      parseSessionId("codex", "thread_id: 0f8a1b2c-3d4e-5f60-7182-93a4b5c6d7e8"),
+    ).toBe("0f8a1b2c-3d4e-5f60-7182-93a4b5c6d7e8");
+    expect(parseSessionId("codex", "session id = ABC12345")).toBe("ABC12345");
+  });
+
+  it("claude always returns undefined (no resume id surfaced by -p)", () => {
+    expect(
+      parseSessionId("claude", "anything --resume=nope session: whatever"),
+    ).toBeUndefined();
   });
 });
 

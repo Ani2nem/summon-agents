@@ -12,6 +12,7 @@ import * as path from "node:path";
 import { loadAgents, newestActivityMs } from "./dispatch.js";
 import { AgentResultSchema } from "./ports.js";
 import { agentRunDir, loadRun, runsRoot } from "./run.js";
+import { capturePaneLastLine, hasSession } from "./session.js";
 
 export interface AgentProgress {
   slug: string;
@@ -23,6 +24,8 @@ export interface AgentProgress {
   /** Files the agent has created or modified in its worktree so far. */
   changedFiles: string[];
   summary?: string;
+  /** Live "what it's doing right now": last pane line (tmux) or last log line. */
+  currentActivity?: string;
 }
 
 export interface RunProgress {
@@ -59,6 +62,39 @@ async function worktreeChangedFiles(worktree: string): Promise<string[]> {
     );
 }
 
+/** Last non-empty line of a file, or undefined if empty/absent. */
+async function lastLineOf(file: string): Promise<string | undefined> {
+  try {
+    const raw = await fs.readFile(file, "utf8");
+    const lines = raw
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+    return lines.length ? lines[lines.length - 1] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A short "what it's doing right now" string: the live pane's last line when the
+ * agent's tmux session is alive, else the last line of stdout.log (then
+ * stderr.log). Read-only, best-effort.
+ */
+async function currentActivityFor(
+  rDir: string,
+  tmuxSession: string | undefined,
+): Promise<string | undefined> {
+  if (tmuxSession && (await hasSession(tmuxSession))) {
+    const line = await capturePaneLastLine(tmuxSession);
+    if (line) return line;
+  }
+  return (
+    (await lastLineOf(path.join(rDir, "stdout.log"))) ??
+    (await lastLineOf(path.join(rDir, "stderr.log")))
+  );
+}
+
 /** Snapshot the live state of a run's agents. Read-only. */
 export async function collectProgress(
   repoRoot: string,
@@ -87,6 +123,7 @@ export async function collectProgress(
     const changedFiles = await worktreeChangedFiles(r.worktree);
     const activity = await newestActivityMs(rDir, r.worktree);
     const startedMs = Date.parse(r.startedAt);
+    const currentActivity = await currentActivityFor(rDir, r.tmuxSession);
     agents.push({
       slug: r.slug,
       pid: r.pid,
@@ -95,6 +132,7 @@ export async function collectProgress(
       idleMs: activity > 0 ? now - activity : now - startedMs,
       changedFiles,
       summary,
+      currentActivity,
     });
   }
   return { runId: id, status: state?.status ?? "unknown", agents, recentRuns };
@@ -144,10 +182,14 @@ export function formatProgress(p: RunProgress): string {
   }
   for (const a of p.agents) {
     lines.push("");
+    const activity =
+      a.state === "running" && a.currentActivity
+        ? `  ·  "${a.currentActivity}"`
+        : "";
     lines.push(
       `${mark(a.state)} ${a.slug}  ·  ${a.state}  ·  ${fmtDuration(
         a.elapsedMs,
-      )} elapsed  ·  quiet ${fmtDuration(a.idleMs)}  ·  ${a.changedFiles.length} file(s)`,
+      )} elapsed  ·  quiet ${fmtDuration(a.idleMs)}  ·  ${a.changedFiles.length} file(s)${activity}`,
     );
     if (a.summary) lines.push(`    ${a.summary}`);
     for (const f of a.changedFiles.slice(0, 8)) lines.push(`    ~ ${f}`);

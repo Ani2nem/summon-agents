@@ -13,6 +13,8 @@ export {
   agentAvailable,
   normalizeVendor,
   parseTriageResponse,
+  parseSessionId,
+  resumeCommand,
 } from "@summon-agents/core";
 
 /** Read a plan from a file path, or return the string directly if not a file. */

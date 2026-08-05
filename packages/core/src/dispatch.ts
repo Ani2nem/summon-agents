@@ -24,6 +24,13 @@ import {
   type TriageDecision,
 } from "./ports.js";
 import { agentRunDir, runDir, worktreePathFor } from "./run.js";
+import {
+  killSession,
+  newDetachedSession,
+  pipePaneToFile,
+  sessionName,
+  tmuxAvailable,
+} from "./session.js";
 import { addWorktree } from "./worktree.js";
 
 // ---------------------------------------------------------------------------
@@ -144,6 +151,31 @@ export async function spawnDetachedAgent(cfg: TrampolineConfig): Promise<number>
   }
 }
 
+/**
+ * Launch the SAME trampoline under a detached tmux session instead of a bare
+ * detached process. The completion contract is unchanged: the trampoline still
+ * writes result.json on exit. pipe-pane tees the pane (combined stdout+stderr)
+ * into stdout.log so the existing progress/mtime watchdog keeps working, and the
+ * live pane is attachable via `summon-agents open`.
+ */
+export async function spawnTmuxAgent(
+  cfg: TrampolineConfig,
+  session: string,
+): Promise<void> {
+  await fs.mkdir(cfg.runDir, { recursive: true });
+  const trampolinePath = path.join(cfg.runDir, "trampoline.mjs");
+  await fs.writeFile(trampolinePath, TRAMPOLINE_SOURCE);
+
+  await newDetachedSession({
+    name: session,
+    cwd: cfg.worktreeDir,
+    command: process.execPath,
+    args: [trampolinePath],
+    env: { SUMMON_TRAMPOLINE: JSON.stringify(cfg) },
+  });
+  await pipePaneToFile(session, path.join(cfg.runDir, "stdout.log"));
+}
+
 // ---------------------------------------------------------------------------
 // AgentRunner: pluggable command builder (claude -p, cursor-agent, or a test stub)
 // ---------------------------------------------------------------------------
@@ -165,15 +197,24 @@ export class ExecAgentRunner implements AgentRunner {
     subtask: Subtask;
     worktreeDir: string;
     runDir: string;
+    runId?: string;
   }) {
     const { command, args } = this.build(input);
-    const pid = await spawnDetachedAgent({
+    const trampoline: TrampolineConfig = {
       command,
       args,
       worktreeDir: input.worktreeDir,
       runDir: input.runDir,
       slug: input.subtask.slug,
-    });
+    };
+    // Prefer a tmux session (live, attachable, resumable) when tmux is available;
+    // otherwise fall back byte-for-byte to today's detached-spawn path.
+    if (input.runId && (await tmuxAvailable())) {
+      const session = sessionName(input.runId, input.subtask.slug);
+      await spawnTmuxAgent(trampoline, session);
+      return { slug: input.subtask.slug, pid: 0, tmuxSession: session };
+    }
+    const pid = await spawnDetachedAgent(trampoline);
     return { slug: input.subtask.slug, pid };
   }
 }
@@ -244,16 +285,26 @@ export async function dispatchDecision(input: {
       renderInstructions(subtask, decision.hotspotFiles),
     );
 
-    const handle = await runner.launch({ subtask, worktreeDir, runDir: rDir });
+    const handle = await runner.launch({
+      subtask,
+      worktreeDir,
+      runDir: rDir,
+      runId,
+    });
     const record: AgentRecord = {
       slug: subtask.slug,
       pid: handle.pid,
       branch,
       worktree: worktreeDir,
       startedAt: new Date().toISOString(),
+      ...(handle.tmuxSession ? { tmuxSession: handle.tmuxSession } : {}),
     };
     records.push(record);
-    notifier?.info(`dispatched ${subtask.slug} (pid ${handle.pid})`);
+    notifier?.info(
+      handle.tmuxSession
+        ? `dispatched ${subtask.slug} (tmux ${handle.tmuxSession})`
+        : `dispatched ${subtask.slug} (pid ${handle.pid})`,
+    );
   }
 
   await saveAgents(repoRoot, runId, records);
@@ -340,12 +391,25 @@ export async function newestActivityMs(
 
 /** Best-effort kill of the detached process group (trampoline + agent). */
 function reapProcess(pid: number): void {
+  if (pid <= 0) return; // tmux-launched agents carry no reapable pid
   try {
     process.kill(-pid, "SIGKILL"); // negative pid => process group
   } catch {
     try {
       process.kill(pid, "SIGKILL");
     } catch {}
+  }
+}
+
+/**
+ * Terminate a stuck agent by whichever handle it has: kill its tmux session when
+ * tmux-launched, else its detached process group.
+ */
+async function reapAgent(record: AgentRecord): Promise<void> {
+  if (record.tmuxSession) {
+    await killSession(record.tmuxSession);
+  } else {
+    reapProcess(record.pid);
   }
 }
 
@@ -422,7 +486,7 @@ export async function awaitRun(input: {
       const stalled = now() - (lastProgress.get(record.slug) ?? startedMs);
 
       if (elapsed > opts.timeoutMs) {
-        reapProcess(record.pid);
+        await reapAgent(record);
         const synth = await writeSyntheticResult(
           input.repoRoot,
           input.runId,
@@ -432,7 +496,7 @@ export async function awaitRun(input: {
         results.set(record.slug, synth);
         input.notifier?.agentDone(synth);
       } else if (stalled > opts.noProgressMs) {
-        reapProcess(record.pid);
+        await reapAgent(record);
         const synth = await writeSyntheticResult(
           input.repoRoot,
           input.runId,
