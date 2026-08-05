@@ -16,6 +16,12 @@ import {
   triggersCleanup,
 } from "./ports.js";
 import {
+  killSession,
+  listSummonSessions,
+  sessionName,
+  tmuxAvailable,
+} from "./session.js";
+import {
   deleteBranch,
   listWorktrees,
   pruneWorktrees,
@@ -251,7 +257,11 @@ export async function cleanupRun(input: {
 }): Promise<void> {
   const { repoRoot, state } = input;
   const slugs = state.decision?.subtasks.map((s) => s.slug) ?? [];
+  const tmux = await tmuxAvailable();
   for (const slug of slugs) {
+    // Kill the agent's tmux session (best-effort) alongside its worktree. Session
+    // names are deterministic (sessionName), so no need to read agents.json here.
+    if (tmux) await killSession(sessionName(state.runId, slug));
     await removeWorktree({
       repoDir: repoRoot,
       worktreePath: worktreePathFor(repoRoot, state.runId, slug),
@@ -318,6 +328,22 @@ export async function gc(repoRoot: string): Promise<{
     if (runId && !activeRunIds.has(runId)) {
       await deleteBranch({ repoDir: repoRoot, branch });
       branchesDeleted.push(branch);
+    }
+  }
+
+  // Reap tmux sessions whose run is gone or terminal. Session names are lossy
+  // (sanitized), so rather than reverse-map them we build the set of sessions
+  // that active runs legitimately own and kill any summon_* session not in it.
+  if (await tmuxAvailable()) {
+    const keep = new Set<string>();
+    for (const id of activeRunIds) {
+      const state = await loadRun(repoRoot, id);
+      for (const slug of state?.decision?.subtasks.map((s) => s.slug) ?? []) {
+        keep.add(sessionName(id, slug));
+      }
+    }
+    for (const session of await listSummonSessions()) {
+      if (!keep.has(session)) await killSession(session);
     }
   }
 

@@ -9,6 +9,7 @@ export * from "./hotspots.js";
 export * from "./decompose.js";
 export * from "./triage.js";
 export * from "./dispatch.js";
+export * from "./session.js";
 export * from "./progress.js";
 export * from "./validate.js";
 export * from "./merge.js";

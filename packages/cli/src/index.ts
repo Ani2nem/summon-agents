@@ -1,26 +1,37 @@
 // summon-agents CLI. What the editor hook invokes, and what you run by hand.
 
+import { spawn } from "node:child_process";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { Command } from "commander";
 import {
   ExecAgentRunner,
   GhVcs,
+  agentRunDir,
+  attachArgs,
   collectProgress,
   findLatestRun,
   formatProgress,
   formatProgressLine,
   gc as gcCore,
+  hasSession,
   isTerminal,
+  latestRunId,
+  loadAgents,
   loadRun,
   runIsActive,
   runPipeline,
   setRunStatus,
+  type AgentRecord,
 } from "@summon-agents/core";
 import {
   agentAvailable,
   agentConfigFromEnv,
   agentCommandBuilder,
   agentJudge,
+  parseSessionId,
   resolvePlan,
+  resumeCommand,
 } from "./claude.js";
 import { stdoutNotifier } from "./notifier.js";
 
@@ -153,6 +164,59 @@ program
   });
 
 program
+  .command("open [target]")
+  .description(
+    "Attach to a running agent's live session, or resume a finished agent's chat. " +
+      "target is <slug> or <runId>/<slug> (defaults to the latest run's sole agent).",
+  )
+  .action(async (target: string | undefined) => {
+    const repoRoot = process.cwd();
+    const resolved = await resolveAgent(repoRoot, target);
+    if ("error" in resolved) {
+      process.stderr.write(`summon-agents: ${resolved.error}\n`);
+      process.exit(1);
+    }
+    const { runId, record } = resolved;
+
+    // 1) Live tmux session -> attach interactively.
+    if (record.tmuxSession && (await hasSession(record.tmuxSession))) {
+      process.stdout.write(
+        `attaching to ${record.slug} (tmux ${record.tmuxSession}) - press Ctrl-b then d to detach (the agent keeps cooking)\n`,
+      );
+      const child = spawn("tmux", attachArgs(record.tmuxSession), {
+        stdio: "inherit",
+      });
+      child.on("exit", (code) => process.exit(code ?? 0));
+      return;
+    }
+
+    // 2) Finished/failed -> try to resume its coding-agent session from the log.
+    const cfg = agentConfigFromEnv();
+    const logPath = path.join(agentRunDir(repoRoot, runId, record.slug), "stdout.log");
+    const log = await fs.readFile(logPath, "utf8").catch(() => "");
+    const sessionId = parseSessionId(cfg.vendor, log);
+    if (sessionId) {
+      const { command, args } = resumeCommand(cfg, sessionId);
+      process.stdout.write(
+        `resuming ${record.slug} (${cfg.vendor} session ${sessionId}) in ${record.worktree}\n`,
+      );
+      const child = spawn(command, args, {
+        cwd: record.worktree,
+        stdio: "inherit",
+      });
+      child.on("exit", (code) => process.exit(code ?? 0));
+      return;
+    }
+
+    // 3) Nothing to attach/resume - degrade gracefully with the manual path.
+    process.stdout.write(
+      `summon-agents: no live session and no recoverable ${cfg.vendor} session id for ${record.slug}.\n` +
+        `  worktree: ${record.worktree}\n` +
+        `  inspect/continue by hand: cd ${record.worktree} && ${cfg.bin}\n`,
+    );
+  });
+
+program
   .command("gc")
   .alias("doctor")
   .description("Reap orphan worktrees/branches from dead runs")
@@ -196,6 +260,48 @@ program
     const { runInit } = await import("./init.js");
     await runInit(process.cwd(), opts.host);
   });
+
+/**
+ * Resolve `open`'s target to a concrete (runId, agent record). `target` is a bare
+ * slug (against the latest run), a `<runId>/<slug>` pair, or omitted (the latest
+ * run, requiring it to have exactly one agent).
+ */
+async function resolveAgent(
+  repoRoot: string,
+  target: string | undefined,
+): Promise<{ runId: string; record: AgentRecord } | { error: string }> {
+  let runId: string | null;
+  let slug: string | undefined;
+  if (target && target.includes("/")) {
+    const idx = target.indexOf("/");
+    runId = target.slice(0, idx);
+    slug = target.slice(idx + 1);
+  } else {
+    runId = await latestRunId(repoRoot);
+    slug = target;
+  }
+  if (!runId) return { error: "no runs found" };
+
+  const records = await loadAgents(repoRoot, runId);
+  if (records.length === 0) return { error: `run ${runId} has no agents` };
+
+  if (!slug) {
+    if (records.length === 1) return { runId, record: records[0]! };
+    return {
+      error: `run ${runId} has ${records.length} agents; specify one: ${records
+        .map((r) => r.slug)
+        .join(", ")}`,
+    };
+  }
+  const record = records.find((r) => r.slug === slug);
+  if (!record)
+    return {
+      error: `no agent "${slug}" in run ${runId} (have: ${records
+        .map((r) => r.slug)
+        .join(", ")})`,
+    };
+  return { runId, record };
+}
 
 function printResult(result: Awaited<ReturnType<typeof runPipeline>>): void {
   const out = process.stdout;

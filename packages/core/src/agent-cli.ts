@@ -125,6 +125,63 @@ export function agentRunArgs(cfg: AgentCliConfig, prompt: string): string[] {
   return VENDORS[cfg.vendor].runArgs(prompt, cfg);
 }
 
+/**
+ * Build the command to re-open a prior agent session interactively, so a human
+ * can pick up its context (`summon-agents open` after an agent has finished). The
+ * resume flag differs per vendor.
+ */
+export function resumeCommand(
+  cfg: AgentCliConfig,
+  sessionId: string,
+): AgentCommand {
+  switch (cfg.vendor) {
+    case "claude":
+      return { command: cfg.bin, args: ["--resume", sessionId] };
+    case "cursor":
+      return { command: cfg.bin, args: [`--resume=${sessionId}`] };
+    case "copilot":
+      return { command: cfg.bin, args: [`--resume=${sessionId}`] };
+    case "codex":
+      return { command: cfg.bin, args: ["exec", "resume", sessionId] };
+  }
+}
+
+/**
+ * Best-effort extraction of a resumable session/thread id from an agent's
+ * captured log text. Used by `open` to resume a FINISHED agent's session.
+ *
+ * - cursor / copilot: their CLIs print the resume invocation (e.g.
+ *   `--resume=<id>` or `--resume <id>`); we lift the id straight out of it.
+ * - codex: EXPERIMENTAL. codex exec streams a session/thread id line; we match a
+ *   plausible id after a "session"/"thread" label. The exact format drifts
+ *   between versions, so this is a best-effort heuristic, not a guarantee.
+ * - claude: returns undefined. `claude -p` does not surface a resume id without
+ *   changing its output format (out of scope); `open` degrades gracefully.
+ */
+export function parseSessionId(
+  vendor: AgentVendor,
+  log: string,
+): string | undefined {
+  switch (vendor) {
+    case "cursor":
+    case "copilot": {
+      const m = /--resume[= ]([^\s"'`]+)/.exec(log);
+      return m ? m[1] : undefined;
+    }
+    case "codex": {
+      // EXPERIMENTAL: match an id following a session/thread label. Accepts a
+      // UUID or a token-like id; whichever appears first wins.
+      const m =
+        /(?:session|thread)(?:[ _-]?id)?["']?\s*[:=]?\s*["']?([0-9a-fA-F-]{8,}|[A-Za-z0-9_-]{8,})/.exec(
+          log,
+        );
+      return m ? m[1] : undefined;
+    }
+    case "claude":
+      return undefined;
+  }
+}
+
 const TRIAGE_SYSTEM = `You are the planning brain of summon-agents. Given an approved implementation plan, decide whether the work should be split into parallel agents.
 
 Respond with ONLY a JSON object (no prose, no code fence) matching:

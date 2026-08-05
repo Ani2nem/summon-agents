@@ -70,6 +70,9 @@ function formatResult(lines: string[], result: PipelineResult): string {
       `HUMAN REVIEW REQUIRED - do NOT finalize this yourself. Present the diff above to the user and WAIT for the user to explicitly say to merge. Only after the user approves, call summon_merge with runId "${result.runId}". If the user wants to discard, call summon_abort. Do not call summon_merge based on your own judgment.`,
     );
   }
+  if (result.status === "needsHuman" || result.status === "awaitingReview") {
+    out.push("to inspect an agent: summon-agents open <slug>");
+  }
   return out.join("\n");
 }
 
