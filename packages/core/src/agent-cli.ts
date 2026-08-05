@@ -42,6 +42,13 @@ export interface AgentCliConfig {
 interface VendorProfile {
   bin: string;
   runArgs: (prompt: string, cfg: AgentCliConfig) => string[];
+  /**
+   * EXPERIMENTAL (per-vendor): args to seed the vendor's INTERACTIVE TUI with a
+   * task prompt, WITHOUT the headless print flag (`-p` / `exec`), so a human can
+   * attach and steer the agent (attended mode). Flags mirror runArgs' auto-approve
+   * behavior but keep the session interactive.
+   */
+  interactiveArgs: (prompt: string, cfg: AgentCliConfig) => string[];
   versionArgs: string[];
 }
 
@@ -58,6 +65,12 @@ const VENDORS: Record<AgentVendor, VendorProfile> = {
         ? ["--dangerously-skip-permissions"]
         : ["--permission-mode", cfg.permissionMode]),
     ],
+    // EXPERIMENTAL: interactive TUI seeded with the prompt (no `-p`).
+    interactiveArgs: (prompt, cfg) => [
+      prompt,
+      "--permission-mode",
+      cfg.permissionMode,
+    ],
     versionArgs: ["--version"],
   },
   // Cursor's headless CLI. `-p` runs non-interactively; `--force` auto-approves
@@ -65,6 +78,8 @@ const VENDORS: Record<AgentVendor, VendorProfile> = {
   cursor: {
     bin: "cursor-agent",
     runArgs: (prompt) => ["-p", prompt, "--force"],
+    // EXPERIMENTAL: interactive TUI seeded with the prompt (no `-p`).
+    interactiveArgs: (prompt) => [prompt, "--force"],
     versionArgs: ["--version"],
   },
   // GitHub Copilot CLI (newer / experimental). `-p` prompt, `--allow-all-tools`
@@ -72,6 +87,8 @@ const VENDORS: Record<AgentVendor, VendorProfile> = {
   copilot: {
     bin: "copilot",
     runArgs: (prompt) => ["-p", prompt, "--allow-all-tools"],
+    // EXPERIMENTAL: interactive TUI seeded with the prompt (no `-p`).
+    interactiveArgs: (prompt) => [prompt, "--allow-all-tools"],
     versionArgs: ["--version"],
   },
   // OpenAI Codex CLI. Headless mode is `codex exec "<prompt>"`;
@@ -85,6 +102,8 @@ const VENDORS: Record<AgentVendor, VendorProfile> = {
       prompt,
       "--dangerously-bypass-approvals-and-sandbox",
     ],
+    // EXPERIMENTAL: interactive TUI seeded with the prompt (no `exec`).
+    interactiveArgs: (prompt) => [prompt],
     versionArgs: ["--version"],
   },
 };
@@ -123,6 +142,18 @@ export function agentConfigFromEnv(env = process.env): AgentCliConfig {
 /** The args to run one headless, auto-approved prompt through the vendor CLI. */
 export function agentRunArgs(cfg: AgentCliConfig, prompt: string): string[] {
   return VENDORS[cfg.vendor].runArgs(prompt, cfg);
+}
+
+/**
+ * EXPERIMENTAL: the args to seed the vendor's INTERACTIVE TUI with a prompt
+ * (attended mode). Parallel to `agentRunArgs`, but WITHOUT the headless flag, so
+ * a human can attach and steer the running agent.
+ */
+export function agentInteractiveArgs(
+  cfg: AgentCliConfig,
+  prompt: string,
+): string[] {
+  return VENDORS[cfg.vendor].interactiveArgs(prompt, cfg);
 }
 
 /**
@@ -231,33 +262,59 @@ export function parseTriageResponse(text: string, plan: string): TriageDecision 
  */
 export function agentCommandBuilder(cfg: AgentCliConfig) {
   return (ctx: { subtask: Subtask; runDir: string }): AgentCommand => {
-    // With a lane, keep the agent strictly inside its subtree - including any
-    // scaffolding. Greenfield agents otherwise run `npm init` / `create-vite` at
-    // the worktree ROOT (writing root package.json etc.), which lands outside the
-    // lane and trips the out-of-lane backstop, aborting the whole run.
-    const lane =
-      ctx.subtask.allowedFiles.length > 0
-        ? `\n\nYOUR LANE - create or modify files ONLY within these paths, never at the repository root or in another lane:\n${ctx.subtask.allowedFiles
-            .map((f) => `- ${f}`)
-            .join(
-              "\n",
-            )}\n\nIf you need to initialize or scaffold (npm init, create-vite, framework or project generators, etc.), do it INSIDE your lane directory - create the directory and run the tool there (e.g. \`mkdir -p <your-lane-dir> && cd <your-lane-dir>\`) or point the generator at that path. Never run a scaffolder at the repository root. Every file you create must live under one of the lane paths above.`
-        : "";
-    const prompt = `You are implementing ONE task directly in the current working directory (a git worktree). Make the changes here, then commit them with git. Work autonomously - do not ask for confirmation or wait for input.
+    return {
+      command: cfg.bin,
+      args: agentRunArgs(cfg, buildTaskPrompt(ctx.subtask)),
+    };
+  };
+}
 
-# Task: ${ctx.subtask.title}
+/**
+ * EXPERIMENTAL: build the command that opens the vendor's INTERACTIVE TUI seeded
+ * with the SAME task prompt as `agentCommandBuilder`, minus the headless flag, so
+ * a human can attach and steer the agent (attended mode). Shares `buildTaskPrompt`
+ * with the headless builder so the two never drift.
+ */
+export function agentInteractiveCommandBuilder(
+  cfg: AgentCliConfig,
+): (ctx: { subtask: Subtask; runDir: string }) => AgentCommand {
+  return (ctx: { subtask: Subtask; runDir: string }): AgentCommand => {
+    return {
+      command: cfg.bin,
+      args: agentInteractiveArgs(cfg, buildTaskPrompt(ctx.subtask)),
+    };
+  };
+}
 
-${ctx.subtask.instructions}${lane}
+/**
+ * Build the task prompt embedded into an agent's invocation. Shared by the
+ * headless (`agentCommandBuilder`) and interactive
+ * (`agentInteractiveCommandBuilder`) builders so the seeded task never drifts
+ * between attended and unattended modes.
+ */
+function buildTaskPrompt(subtask: Subtask): string {
+  // With a lane, keep the agent strictly inside its subtree - including any
+  // scaffolding. Greenfield agents otherwise run `npm init` / `create-vite` at
+  // the worktree ROOT (writing root package.json etc.), which lands outside the
+  // lane and trips the out-of-lane backstop, aborting the whole run.
+  const lane =
+    subtask.allowedFiles.length > 0
+      ? `\n\nYOUR LANE - create or modify files ONLY within these paths, never at the repository root or in another lane:\n${subtask.allowedFiles
+          .map((f) => `- ${f}`)
+          .join(
+            "\n",
+          )}\n\nIf you need to initialize or scaffold (npm init, create-vite, framework or project generators, etc.), do it INSIDE your lane directory - create the directory and run the tool there (e.g. \`mkdir -p <your-lane-dir> && cd <your-lane-dir>\`) or point the generator at that path. Never run a scaffolder at the repository root. Every file you create must live under one of the lane paths above.`
+      : "";
+  return `You are implementing ONE task directly in the current working directory (a git worktree). Make the changes here, then commit them with git. Work autonomously - do not ask for confirmation or wait for input.
+
+# Task: ${subtask.title}
+
+${subtask.instructions}${lane}
 
 ## How to work (important)
 - Write the code, then COMMIT it with git as soon as the implementation is complete - commit BEFORE any optional verification, so your work is never lost.
 - Do NOT run heavy or manual verification yourself: no browser / end-to-end testing, no long-running servers (\`npm start\`, dev servers), no large simulation gauntlets. The orchestrator runs the project's own typecheck / build / test on the merged result - that is where validation happens, not here. A quick local sanity check is fine; extensive verification is not your job and it makes the run look stalled.
 - Keep making steady, visible progress. If you finish early, commit and stop rather than polishing indefinitely.`;
-    return {
-      command: cfg.bin,
-      args: agentRunArgs(cfg, prompt),
-    };
-  };
 }
 
 /** A Judge backed by a headless agent CLI (the configured vendor). */

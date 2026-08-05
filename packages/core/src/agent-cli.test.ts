@@ -3,6 +3,8 @@ import {
   type AgentCliConfig,
   agentCommandBuilder,
   agentConfigFromEnv,
+  agentInteractiveArgs,
+  agentInteractiveCommandBuilder,
   agentRunArgs,
   normalizeVendor,
   parseSessionId,
@@ -82,6 +84,89 @@ describe("agentRunArgs (per-vendor headless flags)", () => {
   it("codex uses `exec` with the bypass flag", () => {
     const cfg = { vendor: "codex" as const, bin: "codex", permissionMode: "bypassPermissions", skipPermissions: false };
     expect(agentRunArgs(cfg, "hi")).toEqual(["exec", "hi", "--dangerously-bypass-approvals-and-sandbox"]);
+  });
+});
+
+describe("agentInteractiveArgs (per-vendor interactive/attended flags)", () => {
+  it("claude seeds the prompt + --permission-mode, no headless -p", () => {
+    const cfg = { vendor: "claude" as const, bin: "claude", permissionMode: "bypassPermissions", skipPermissions: false };
+    const args = agentInteractiveArgs(cfg, "hi");
+    expect(args).toEqual(["hi", "--permission-mode", "bypassPermissions"]);
+    expect(args).toContain("hi");
+    expect(args).not.toContain("-p");
+  });
+
+  it("cursor seeds the prompt + --force, no headless -p", () => {
+    const cfg = { vendor: "cursor" as const, bin: "cursor-agent", permissionMode: "bypassPermissions", skipPermissions: false };
+    const args = agentInteractiveArgs(cfg, "hi");
+    expect(args).toEqual(["hi", "--force"]);
+    expect(args).toContain("--force");
+    expect(args).not.toContain("-p");
+  });
+
+  it("copilot seeds the prompt + --allow-all-tools, no headless -p", () => {
+    const cfg = { vendor: "copilot" as const, bin: "copilot", permissionMode: "bypassPermissions", skipPermissions: false };
+    const args = agentInteractiveArgs(cfg, "hi");
+    expect(args).toEqual(["hi", "--allow-all-tools"]);
+    expect(args).toContain("--allow-all-tools");
+    expect(args).not.toContain("-p");
+  });
+
+  it("codex seeds the prompt, no `exec`", () => {
+    const cfg = { vendor: "codex" as const, bin: "codex", permissionMode: "bypassPermissions", skipPermissions: false };
+    const args = agentInteractiveArgs(cfg, "hi");
+    expect(args).toEqual(["hi"]);
+    expect(args).toContain("hi");
+    expect(args).not.toContain("exec");
+  });
+});
+
+describe("agentInteractiveCommandBuilder", () => {
+  it("seeds the same task prompt into the interactive TUI, without the headless flag", () => {
+    const build = agentInteractiveCommandBuilder({
+      vendor: "claude",
+      bin: "claude",
+      permissionMode: "bypassPermissions",
+      skipPermissions: false,
+    });
+    const cmd = build({
+      subtask: {
+        slug: "auth",
+        title: "Add auth",
+        instructions: "Create src/auth.js exporting login()",
+        allowedFiles: ["src/auth.js"],
+      },
+      runDir: "/runs/r1/auth",
+    });
+    expect(cmd.command).toBe("claude");
+    const joined = cmd.args.join(" ");
+    // the seeded task prompt is present...
+    expect(joined).toContain("Add auth");
+    expect(joined).toContain("Create src/auth.js exporting login()");
+    // ...but NOT the headless print flag
+    expect(cmd.args).not.toContain("-p");
+    expect(cmd.args).toContain("--permission-mode");
+  });
+
+  it("honors a custom bin and omits `exec` for codex", () => {
+    const build = agentInteractiveCommandBuilder({
+      vendor: "codex",
+      bin: "/opt/codex",
+      permissionMode: "bypassPermissions",
+      skipPermissions: false,
+    });
+    const cmd = build({
+      subtask: {
+        slug: "main",
+        title: "Do the whole plan",
+        instructions: "implement everything",
+        allowedFiles: [],
+      },
+      runDir: "/r",
+    });
+    expect(cmd.command).toBe("/opt/codex");
+    expect(cmd.args).not.toContain("exec");
+    expect(cmd.args.join(" ")).toContain("implement everything");
   });
 });
 
