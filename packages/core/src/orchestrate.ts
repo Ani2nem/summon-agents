@@ -37,6 +37,7 @@ import {
   setRunStatus,
 } from "./run.js";
 import { runTriage } from "./triage.js";
+import { tmuxAvailable } from "./session.js";
 import { changedFilesVsBase, deleteBranch, git } from "./worktree.js";
 
 /** Root project manifests. Their absence means the repo needs scaffolding. */
@@ -119,6 +120,14 @@ export interface PipelineOptions {
    */
   review?: boolean;
   /**
+   * Attended (interactive) mode. When true, each agent is launched INTERACTIVELY
+   * in its tmux session; the human attaches with `summon-agents open <slug>`,
+   * steers it, and exits it when done to let the pipeline continue to merge.
+   * Requires tmux. The watchdog is relaxed so an agent idling while it waits for
+   * the human is not reaped. Default false/undefined = unattended, unchanged.
+   */
+  attended?: boolean;
+  /**
    * Periodic heartbeat during the cook phase (throttled), for live progress
    * streaming (e.g. MCP progress notifications, or a CLI heartbeat). Read-only.
    */
@@ -153,6 +162,19 @@ export async function runPipeline(
 
   try {
     let state = await createRun({ repoRoot, plan, baseBranch, runId });
+
+    // Attended (interactive) mode requires tmux: each agent runs in a tmux
+    // session the human attaches to and drives. Without tmux there is nothing to
+    // attach to, so bail early (base untouched) before any dispatch.
+    if (options.attended && !(await tmuxAvailable())) {
+      state = await setRunStatus({ repoRoot, state, status: "needsHuman" });
+      return {
+        status: "needsHuman",
+        runId,
+        reason:
+          "attended mode requires tmux (not available). Install tmux or rerun without --attended.",
+      };
+    }
 
     // Triage + brake. On a greenfield repo, tell the judge so it splits into
     // self-contained subdirectory lanes instead of lanes that all scaffold at
@@ -196,13 +218,29 @@ export async function runPipeline(
     notifier.info(
       "live view while this runs: `npx -y summon-agents watch` (or `summon-agents status`) in this repo",
     );
+    if (options.attended) {
+      notifier.info(
+        "attended mode: agents launched interactively - attach and drive each with `summon-agents open <slug>`; exit an agent when done to continue the merge.",
+      );
+    }
+
+    // Attended agents idle while they wait for the human to attach and steer, so
+    // relax the watchdog to effectively never reap on timeout / no-progress.
+    // Merge over any explicit watch options so callers can still tune interval.
+    const watch: WatchOptions | undefined = options.attended
+      ? {
+          ...options.watch,
+          timeoutMs: 24 * 60 * 60 * 1000,
+          noProgressMs: 24 * 60 * 60 * 1000,
+        }
+      : options.watch;
 
     const results = await awaitRun({
       repoRoot,
       runId,
       records,
       notifier,
-      options: options.watch,
+      options: watch,
       onTick: options.onTick,
     });
 

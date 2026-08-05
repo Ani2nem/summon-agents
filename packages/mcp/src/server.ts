@@ -14,6 +14,7 @@ import {
   agentAvailable,
   agentConfigFromEnv,
   agentCommandBuilder,
+  agentInteractiveCommandBuilder,
   agentJudge,
   collectProgress,
   finalizeRun,
@@ -97,9 +98,15 @@ export function createServer(repoRoot: string = process.cwd()): McpServer {
           .describe(
             "If true, merge + validate but do NOT finalize - stop at a HUMAN review gate and return awaitingReview. You must then present the diff to the user and wait for the USER's explicit approval before calling summon_merge. Do not self-approve. Set this when the user asks to review before merging.",
           ),
+        attended: z
+          .boolean()
+          .optional()
+          .describe(
+            "run agents interactively for live steering; requires tmux and attaching from a terminal",
+          ),
       },
     },
-    async ({ plan, review }, extra) => {
+    async ({ plan, review, attended }, extra) => {
       const cfg = agentConfigFromEnv();
       if (!(await agentAvailable(cfg))) {
         return text(
@@ -150,12 +157,17 @@ export function createServer(repoRoot: string = process.cwd()): McpServer {
         plan,
         {
           judge: agentJudge(cfg),
-          runner: new ExecAgentRunner(agentCommandBuilder(cfg)),
+          runner: new ExecAgentRunner(
+            attended
+              ? agentInteractiveCommandBuilder(cfg)
+              : agentCommandBuilder(cfg),
+          ),
           vcs: new GhVcs(),
           notifier,
         },
         {
           review: Boolean(review),
+          attended: Boolean(attended),
           onTick: async () => {
             const p = await collectProgress(repoRoot);
             if (p) await emit(formatProgressLine(p));

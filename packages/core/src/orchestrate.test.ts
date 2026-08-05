@@ -390,6 +390,35 @@ describe("runPipeline (end to end with fakes)", () => {
     ).toBe(true); // now it landed
   });
 
+  it("attended mode without tmux: returns needsHuman and does not dispatch or merge", async () => {
+    // The vitest suite sets SUMMON_DISABLE_TMUX=1, so tmuxAvailable() is false.
+    // Attended mode must bail early (base untouched) before any dispatch/merge.
+    const result = await runPipeline(
+      repo,
+      "Build auth and api",
+      {
+        judge: splittingJudge(split2),
+        runner: writingRunner(),
+        vcs: noRemoteVcs,
+        notifier: silentNotifier(),
+      },
+      { runId: "pipe-attended", watch: { intervalMs: 50 }, attended: true },
+    );
+
+    expect(result.status).toBe("needsHuman");
+    expect(result.reason).toMatch(/tmux/i);
+    // Nothing dispatched or merged: no decision was reached, base is untouched.
+    expect(result.mergedSlugs).toBeUndefined();
+    const { git } = await import("./worktree.js");
+    await git(repo, ["checkout", "main"]);
+    expect(
+      await fs
+        .access(path.join(repo, "src/auth/index.ts"))
+        .then(() => true)
+        .catch(() => false),
+    ).toBe(false);
+  });
+
   it("isGreenfield: true for an empty repo, false once a root manifest exists", async () => {
     expect(await isGreenfield(repo)).toBe(true);
     await fs.writeFile(path.join(repo, "package.json"), "{}\n");
