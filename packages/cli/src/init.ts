@@ -12,6 +12,7 @@
 // is shared, so Cursor (rules) and Copilot (prompts) in M2 reuse it verbatim.
 
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 
 /**
@@ -75,12 +76,26 @@ ${TRIGGER_BODY}
   };
 }
 
-type Host = "claude-code" | "cursor" | "copilot";
+/** OpenAI Codex: a prompt trigger file under `.codex/prompts/`. */
+export function codexPromptFile(repoRoot: string): HostFile {
+  const contents = `---
+description: Dispatch the approved plan to parallel summon-agents workers
+---
+${TRIGGER_BODY}
+`;
+  return {
+    path: path.join(repoRoot, ".codex", "prompts", "summon-agents.md"),
+    contents,
+  };
+}
+
+type Host = "claude-code" | "cursor" | "copilot" | "codex";
 
 const HOST_FILE: Record<Host, (repoRoot: string) => HostFile> = {
   "claude-code": claudeCommandFile,
   cursor: cursorRuleFile,
   copilot: copilotPromptFile,
+  codex: codexPromptFile,
 };
 
 /**
@@ -93,6 +108,7 @@ const HOST_VENDOR: Record<Host, string> = {
   "claude-code": "claude",
   cursor: "cursor",
   copilot: "copilot",
+  codex: "codex",
 };
 
 /** VS Code uses `servers`; Claude Code and Cursor use `mcpServers`. */
@@ -140,6 +156,39 @@ async function registerMcp(repoRoot: string, host: Host): Promise<string> {
   return full;
 }
 
+/**
+ * Register the MCP server for Codex. EXPERIMENTAL - verify against the current
+ * Codex config schema. Unlike the JSON-based hosts, Codex reads a GLOBAL TOML
+ * file (`~/.codex/config.toml`) with `[mcp_servers.<name>]` tables, so this is a
+ * separate path from `registerMcp`. Idempotent: skips if a
+ * `[mcp_servers.summon-agents]` block already exists. The codex dir is resolved
+ * from CODEX_HOME (falling back to ~/.codex) so tests can redirect it.
+ */
+async function registerCodexMcp(): Promise<string> {
+  const codexDir =
+    process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+  const file = path.join(codexDir, "config.toml");
+  let current = "";
+  try {
+    current = await fs.readFile(file, "utf8");
+  } catch {
+    /* no config.toml yet */
+  }
+  if (current.includes("[mcp_servers.summon-agents]")) {
+    return file;
+  }
+  const block = `[mcp_servers.summon-agents]
+command = "npx"
+args = ["-y", "summon-agents-mcp"]
+env = { SUMMON_AGENT_VENDOR = "codex" }
+`;
+  const prefix = current && !current.endsWith("\n") ? current + "\n" : current;
+  const next = prefix ? prefix + "\n" + block : block;
+  await fs.mkdir(codexDir, { recursive: true });
+  await fs.writeFile(file, next);
+  return file;
+}
+
 /** Ensure `.summon-agents/` is gitignored (it holds run state + the staged plan). */
 async function ensureGitignore(repoRoot: string): Promise<void> {
   const gi = path.join(repoRoot, ".gitignore");
@@ -158,7 +207,7 @@ async function ensureGitignore(repoRoot: string): Promise<void> {
 export async function runInit(repoRoot: string, host: string): Promise<void> {
   if (!(host in HOST_FILE)) {
     process.stdout.write(
-      `summon-agents: unknown host "${host}" (expected: claude-code, cursor, copilot)\n`,
+      `summon-agents: unknown host "${host}" (expected: claude-code, cursor, copilot, codex)\n`,
     );
     return;
   }
@@ -166,7 +215,9 @@ export async function runInit(repoRoot: string, host: string): Promise<void> {
 
   const trigger = HOST_FILE[h](repoRoot);
   await writeHostFile(trigger);
-  const mcpPath = await registerMcp(repoRoot, h);
+  // Codex registers its MCP server in a global TOML file, not a per-repo JSON.
+  const mcpPath =
+    h === "codex" ? await registerCodexMcp() : await registerMcp(repoRoot, h);
   await ensureGitignore(repoRoot);
 
   const invoke =
@@ -174,12 +225,15 @@ export async function runInit(repoRoot: string, host: string): Promise<void> {
       ? "/summon-agents"
       : h === "cursor"
         ? "the summon-agents rule (ask Cursor to \"summon agents\")"
-        : "the summon-agents prompt (/summon-agents in Copilot Chat)";
+        : h === "copilot"
+          ? "the summon-agents prompt (/summon-agents in Copilot Chat)"
+          : "the summon-agents prompt (/summon-agents in Codex)";
 
   const workerCli = {
     "claude-code": "claude (Claude Code CLI)",
     cursor: "cursor-agent (Cursor CLI)",
     copilot: "copilot (GitHub Copilot CLI)",
+    codex: "codex (OpenAI Codex CLI)",
   }[h];
 
   process.stdout.write(
