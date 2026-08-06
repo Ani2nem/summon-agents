@@ -34,6 +34,25 @@ export const SubtaskSchema = z.object({
 export type Subtask = z.infer<typeof SubtaskSchema>;
 
 /**
+ * A final, SEQUENTIAL integration step. Parallel lanes are built blind (each
+ * agent sees only its own lane), so anything that must tie the finished pieces
+ * together - a shared entry point, an HTTP server that serves several pages, a
+ * router that composes independently-built features - cannot be written
+ * correctly inside any one lane. This step runs ONCE, AFTER all lanes have
+ * merged, in a worktree that contains every piece, so it can read the real
+ * routes/exports the pieces expose and wire the shared surface to match. This is
+ * the cure for the "each agent invents its own server and they collide" class of
+ * bug: the shared surface is built once, with full sight, instead of N times blind.
+ */
+export const IntegrationTaskSchema = z.object({
+  /** Human-readable title, surfaced to the user. */
+  title: z.string().min(1).default("Integrate the parallel work"),
+  /** What shared surface to wire up once the lanes are merged. */
+  instructions: z.string().min(1),
+});
+export type IntegrationTask = z.infer<typeof IntegrationTaskSchema>;
+
+/**
  * The brake's output. Either the work is not worth splitting (a single focused
  * agent runs it) or it is decomposed into disjoint subtasks plus any shared
  * "hotspot" files that must be kept out of the parallel lanes (loophole C).
@@ -55,6 +74,13 @@ export const TriageDecisionSchema = z.object({
    * each race to edit the manifest/lockfile (loophole C).
    */
   preInstall: z.array(z.string()).default([]),
+  /**
+   * Optional final integration step (split runs only). Set when the lanes share
+   * a foundation that only makes sense once every piece exists (an entry point,
+   * a server serving several pages, a router composing features). Null when the
+   * lanes are truly independent and need no wiring - then this step is skipped.
+   */
+  integration: IntegrationTaskSchema.nullable().default(null),
 });
 export type TriageDecision = z.infer<typeof TriageDecisionSchema>;
 
@@ -157,6 +183,22 @@ export interface ConflictContext {
   validationOutput?: string;
 }
 
+/** Context handed to the Judge for the final integration step. */
+export interface IntegrationContext {
+  /**
+   * A worktree holding EVERY merged lane. The integrator reads the real pieces
+   * here and wires the shared surface to match, then commits. Its own dir, so a
+   * broad `git add -A` cannot sweep the user's untracked files.
+   */
+  repoDir: string;
+  /** The full approved plan, for cross-cutting context. */
+  plan: string;
+  /** What shared surface to wire up (from the triage integration task). */
+  instructions: string;
+  /** The lane slugs whose work was merged and is present to integrate. */
+  mergedSlugs: string[];
+}
+
 /**
  * The LLM judgment layer. Under MCP the host model implements this; under the
  * CLI it shells out to a coding-agent CLI; under tests it is a deterministic fake.
@@ -169,6 +211,14 @@ export interface Judge {
    * in repoDir. Resolves true if it believes it fixed things, false to give up.
    */
   resolveConflict(ctx: ConflictContext): Promise<boolean>;
+  /**
+   * OPTIONAL final integration pass over the merged tree: wire the shared surface
+   * the parallel lanes couldn't build blind (a server, router, entry point).
+   * Resolves true if it did its work, false to give up (-> needsHuman). Optional
+   * so existing Judges/fakes that predate integration keep compiling; when a
+   * Judge does not implement it, the integration step is skipped.
+   */
+  integrate?(ctx: IntegrationContext): Promise<boolean>;
 }
 
 /** A handle to a launched agent process. */

@@ -11,7 +11,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { LOCKFILE_BASENAMES } from "./hotspots.js";
-import type { Judge, Notifier } from "./ports.js";
+import type { IntegrationTask, Judge, Notifier } from "./ports.js";
+import { worktreePathFor } from "./run.js";
 import { detectPackageManager } from "./validate.js";
 import {
   detectValidationCommand,
@@ -19,7 +20,7 @@ import {
   type ValidationResult,
 } from "./validate.js";
 import { execa } from "execa";
-import { git, gitTry } from "./worktree.js";
+import { git, gitTry, removeWorktree } from "./worktree.js";
 
 async function fileExists(p: string): Promise<boolean> {
   try {
@@ -47,6 +48,50 @@ export interface MergeOutcome {
 
 export function integrationBranchName(runId: string): string {
   return `summon/${runId}/integration`;
+}
+
+export function parkedBranchName(runId: string): string {
+  return `summon/${runId}/parked`;
+}
+
+/**
+ * Stage the clean, in-lane work on a side branch when a run needs a human, so
+ * good work is never lost or discarded. This is NOT a landing: it merges the
+ * given (disjoint, in-lane) branches onto a fresh branch off base and does NOT
+ * validate or fast-forward base. It's a park - a captured, mergeable unit the
+ * human can build the fix on top of. Returns the branch name, or null if nothing
+ * was parked. Leaves repoRoot back on base.
+ */
+export async function parkLanes(input: {
+  repoRoot: string;
+  runId: string;
+  baseBranch: string;
+  targets: MergeTarget[];
+}): Promise<string | null> {
+  const { repoRoot, runId, baseBranch, targets } = input;
+  if (targets.length === 0) return null;
+  const branch = parkedBranchName(runId);
+  await gitTry(repoRoot, ["branch", "-D", branch]);
+  await git(repoRoot, ["checkout", "-b", branch, baseBranch]);
+  let parked = 0;
+  for (const t of targets) {
+    await commitAll(t.worktree, `summon: ${t.slug} work`).catch(() => false);
+    const merge = await gitTry(repoRoot, [
+      "merge",
+      "--no-ff",
+      "--no-edit",
+      t.branch,
+    ]);
+    if (!merge.ok) {
+      // Disjoint in-lane branches should never conflict; if one somehow does,
+      // skip it rather than block the whole park.
+      await gitTry(repoRoot, ["merge", "--abort"]);
+      continue;
+    }
+    parked++;
+  }
+  await git(repoRoot, ["checkout", baseBranch]);
+  return parked > 0 ? branch : null;
 }
 
 /**
@@ -138,9 +183,17 @@ export async function runMerge(input: {
   targets: MergeTarget[];
   judge: Judge;
   hotspotFiles?: readonly string[];
+  /** The full approved plan, passed to the integration step for context. */
+  plan?: string;
+  /**
+   * Optional final integration step to run after the lanes merge (split runs
+   * with shared glue). Skipped when null or when the Judge cannot integrate.
+   */
+  integration?: IntegrationTask | null;
   notifier?: Notifier;
 }): Promise<MergeOutcome> {
-  const { repoRoot, runId, baseBranch, targets, judge, notifier } = input;
+  const { repoRoot, runId, baseBranch, targets, judge, plan, integration, notifier } =
+    input;
   const integrationBranch = integrationBranchName(runId);
   const mergedSlugs: string[] = [];
   const noValidation: ValidationResult = { ran: false, ok: true };
@@ -191,6 +244,48 @@ export async function runMerge(input: {
   }
 
   await regenerateLockfiles(repoRoot);
+
+  // Integration pass (split runs with shared glue). The lanes were built blind -
+  // each agent saw only its own lane - so anything that ties the finished pieces
+  // together (a server, a router, an entry point) is wired ONCE here, now that
+  // every piece exists in the tree. Runs in a dedicated worktree on the
+  // integration branch so the integrator's `git add -A` stays contained and can
+  // never sweep the user's untracked files in the main repo. Runs BEFORE the
+  // validation gate, so the wired-up result is what gets validated.
+  if (integration && judge.integrate) {
+    notifier?.info(`integrating: ${integration.title}`);
+    // Release the integration branch from repoRoot so it can be checked out in
+    // the integrator's worktree.
+    await git(repoRoot, ["checkout", baseBranch]);
+    const intgDir = worktreePathFor(repoRoot, runId, "_integration");
+    await gitTry(repoRoot, ["worktree", "remove", intgDir, "--force"]);
+    await git(repoRoot, ["worktree", "add", intgDir, integrationBranch]);
+    let integrated = false;
+    try {
+      integrated = await judge.integrate({
+        repoDir: intgDir,
+        plan: plan ?? "",
+        instructions: integration.instructions,
+        mergedSlugs,
+      });
+      if (integrated) await commitAll(intgDir, "summon: integrate parallel work");
+    } finally {
+      await removeWorktree({ repoDir: repoRoot, worktreePath: intgDir });
+    }
+    if (!integrated) {
+      await gitTry(repoRoot, ["checkout", baseBranch]);
+      return {
+        status: "needsHuman",
+        integrationBranch,
+        baseBranch,
+        reason: `integration step failed: ${integration.title}`,
+        validation: noValidation,
+        mergedSlugs,
+      };
+    }
+    // Re-attach the now-integrated branch in repoRoot for the validation gate.
+    await git(repoRoot, ["checkout", integrationBranch]);
+  }
 
   // Validation gate (loophole A).
   let validation = noValidation;

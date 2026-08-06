@@ -3,7 +3,9 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ExecAgentRunner } from "./dispatch.js";
 import {
+  buildRecovery,
   finalizeRun,
+  formatRecovery,
   isGreenfield,
   runPipeline,
   shouldPreInstall,
@@ -312,6 +314,16 @@ describe("runPipeline (end to end with fakes)", () => {
     expect(result.status).toBe("needsHuman");
     expect(result.reason).toMatch(/out-of-lane/i);
 
+    // Decision-point recovery: the clean lane (api) is parked, auth is contested.
+    expect(result.recovery).toBeDefined();
+    expect(result.recovery!.cleanSlugs).toEqual(["api"]);
+    expect(result.recovery!.parkedBranch).toBe("summon/pipe-stray/parked");
+    expect(result.recovery!.contested).toHaveLength(1);
+    expect(result.recovery!.contested[0]!.file).toBe("src/api/sneak.ts");
+    expect(result.recovery!.contested[0]!.slugs).toEqual(["auth"]);
+    expect(result.recovery!.contested[0]!.convergent).toBe(false);
+    expect(result.recovery!.options.some((o) => /open auth/.test(o))).toBe(true);
+
     // Nothing merged onto base.
     const { git } = await import("./worktree.js");
     await git(repo, ["checkout", "main"]);
@@ -321,6 +333,52 @@ describe("runPipeline (end to end with fakes)", () => {
         .then(() => true)
         .catch(() => false),
     ).toBe(false);
+
+    // The clean lane's work is preserved on the parked branch (not lost).
+    await git(repo, ["checkout", "summon/pipe-stray/parked"]);
+    expect(await exists(path.join(repo, "src/api/index.ts"))).toBe(true);
+    expect(await exists(path.join(repo, "src/api/sneak.ts"))).toBe(false);
+    await git(repo, ["checkout", "main"]);
+  });
+
+  it("decision-point: convergent drift (all agents make the same shared file) offers the shared-foundation option", async () => {
+    // Both agents create their own root server.js - the "they all invented a
+    // shared piece nobody owned" case.
+    const convergentRunner = new ExecAgentRunner(({ subtask }) => ({
+      command: process.execPath,
+      args: [
+        "-e",
+        `const fs=require("fs");fs.mkdirSync("src/${subtask.slug}",{recursive:true});fs.writeFileSync("src/${subtask.slug}/index.ts","x");fs.writeFileSync("server.js","// ${subtask.slug} server\\n");`,
+      ],
+    }));
+
+    const result = await runPipeline(
+      repo,
+      "Build auth and api",
+      {
+        judge: splittingJudge(split2),
+        runner: convergentRunner,
+        vcs: noRemoteVcs,
+        notifier: silentNotifier(),
+      },
+      { runId: "pipe-conv", watch: { intervalMs: 50 } },
+    );
+
+    expect(result.status).toBe("needsHuman");
+    expect(result.recovery).toBeDefined();
+    // No lane stayed clean, so nothing to park.
+    expect(result.recovery!.cleanSlugs).toEqual([]);
+    expect(result.recovery!.parkedBranch).toBeNull();
+    const serverFile = result.recovery!.contested.find(
+      (c) => c.file === "server.js",
+    );
+    expect(serverFile).toBeDefined();
+    expect(serverFile!.slugs.sort()).toEqual(["api", "auth"]);
+    expect(serverFile!.convergent).toBe(true);
+    // The headline option is to build it once as a shared foundation.
+    expect(
+      result.recovery!.options.some((o) => /shared foundation/i.test(o)),
+    ).toBe(true);
   });
 
   it("no-op guard: agents that produce nothing report needsHuman, not completed", async () => {
@@ -562,4 +620,97 @@ describe("runPipeline (end to end with fakes)", () => {
     expect(result.decision?.mode).toBe("single");
     expect(result.mergedSlugs).toEqual(["main"]);
   });
+
+  it("split with integration: wires the shared file once, seeing every lane, and it lands on base", async () => {
+    const split2WithIntegration: TriageDecision = {
+      ...split2,
+      integration: {
+        title: "shared server",
+        instructions: "add server.ts that serves the auth and api pieces",
+      },
+    };
+    let sawBothLanes = false;
+    // A splitting judge that also integrates: the integrator sees the merged
+    // lanes and writes the one shared file none of them could build alone.
+    const judge: Judge = {
+      async triage() {
+        return split2WithIntegration;
+      },
+      async resolveConflict() {
+        return false;
+      },
+      async integrate(ctx) {
+        sawBothLanes =
+          (await exists(path.join(ctx.repoDir, "src/auth/index.ts"))) &&
+          (await exists(path.join(ctx.repoDir, "src/api/index.ts")));
+        await fs.writeFile(
+          path.join(ctx.repoDir, "server.ts"),
+          "// wires auth + api\n",
+        );
+        return true;
+      },
+    };
+
+    const result = await runPipeline(
+      repo,
+      "Build auth and api served by one server",
+      {
+        judge,
+        runner: writingRunner(),
+        vcs: noRemoteVcs,
+        notifier: silentNotifier(),
+      },
+      { runId: "pipe-intg", watch: { intervalMs: 50 } },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(sawBothLanes).toBe(true); // integration ran with all pieces present
+    const { git } = await import("./worktree.js");
+    await git(repo, ["checkout", "main"]);
+    // Both lanes AND the wired shared server landed on base.
+    expect(await exists(path.join(repo, "src/auth/index.ts"))).toBe(true);
+    expect(await exists(path.join(repo, "src/api/index.ts"))).toBe(true);
+    expect(await exists(path.join(repo, "server.ts"))).toBe(true);
+  });
 });
+
+describe("buildRecovery / formatRecovery", () => {
+  it("marks a file touched by 2+ agents as convergent and renders a readable block", () => {
+    const r = buildRecovery(
+      [
+        { slug: "login", stray: ["server.js"] },
+        { slug: "dash", stray: ["server.js"] },
+        { slug: "solo", stray: ["config.toml"] },
+      ],
+      ["settings"],
+      "summon/r/parked",
+    );
+    const server = r.contested.find((c) => c.file === "server.js")!;
+    expect(server.convergent).toBe(true);
+    expect(server.slugs).toEqual(["dash", "login"]);
+    const config = r.contested.find((c) => c.file === "config.toml")!;
+    expect(config.convergent).toBe(false);
+
+    const textOut = formatRecovery(r);
+    expect(textOut).toContain("summon/r/parked");
+    expect(textOut).toContain("settings"); // the parked clean lane
+    expect(textOut).toContain("server.js");
+    expect(textOut.toLowerCase()).toContain("untouched"); // base reassurance
+    expect(textOut.toLowerCase()).toContain("how to resolve");
+  });
+
+  it("handles nothing-parked (every lane contested)", () => {
+    const r = buildRecovery([{ slug: "a", stray: ["x.js"] }], [], null);
+    expect(r.parkedBranch).toBeNull();
+    expect(formatRecovery(r).toLowerCase()).toContain(
+      "no fully in-lane work to park",
+    );
+  });
+});
+
+async function exists(p: string): Promise<boolean> {
+  return fs
+    .access(p)
+    .then(() => true)
+    .catch(() => false);
+}

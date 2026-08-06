@@ -13,6 +13,7 @@ import {
   findLatestRun,
   formatProgress,
   formatProgressLine,
+  formatRecovery,
   gc as gcCore,
   hasSession,
   isTerminal,
@@ -41,7 +42,7 @@ const program = new Command();
 program
   .name("summon-agents")
   .description("Zero-setup orchestrator for parallel AI coding agents")
-  .version("0.7.0");
+  .version("0.8.0");
 
 program
   .command("run")
@@ -318,6 +319,7 @@ function printResult(result: Awaited<ReturnType<typeof runPipeline>>): void {
   }
   if (result.status === "needsHuman") {
     out.write(`summon-agents: needs a human - ${result.reason}\n`);
+    if (result.recovery) out.write(formatRecovery(result.recovery) + "\n");
     return;
   }
   if (result.status === "awaitingReview") {

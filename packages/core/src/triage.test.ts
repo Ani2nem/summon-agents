@@ -157,6 +157,38 @@ describe("normalizeDecision (the brake)", () => {
     expect(d.hotspotFiles).toContain("package.json");
   });
 
+  it("preserves an integration task through a clean split", () => {
+    const d = normalizeDecision(
+      split(
+        [
+          { slug: "a", title: "a", instructions: "x", allowedFiles: ["pages/a/**"] },
+          { slug: "b", title: "b", instructions: "x", allowedFiles: ["pages/b/**"] },
+        ],
+        { integration: { title: "server", instructions: "serve both pages" } },
+      ),
+      "PLAN",
+    );
+    expect(d.mode).toBe("split");
+    expect(d.integration?.instructions).toBe("serve both pages");
+  });
+
+  it("drops the integration task when the split is coerced to a single agent", () => {
+    // Overlapping lanes collapse to single; a single agent owns everything, so
+    // there is no separate integration step.
+    const d = normalizeDecision(
+      split(
+        [
+          { slug: "a", title: "a", instructions: "x", allowedFiles: ["src/shared.ts", "src/a/**"] },
+          { slug: "b", title: "b", instructions: "x", allowedFiles: ["src/shared.ts", "src/b/**"] },
+        ],
+        { integration: { title: "server", instructions: "serve both" } },
+      ),
+      "PLAN",
+    );
+    expect(d.mode).toBe("single");
+    expect(d.integration).toBeNull();
+  });
+
   it("makes duplicate slugs unique", () => {
     const d = normalizeDecision(
       split([

@@ -6,6 +6,7 @@ import {
   agentInteractiveArgs,
   agentInteractiveCommandBuilder,
   agentRunArgs,
+  buildIntegrationPrompt,
   normalizeVendor,
   parseSessionId,
   parseTriageResponse,
@@ -201,6 +202,12 @@ describe("agentCommandBuilder", () => {
     expect(joined).toContain("YOUR LANE");
     expect(joined.toLowerCase()).toContain("repository root");
     expect(joined.toLowerCase()).toContain("scaffold");
+    // L1: hard boundary + self-containment - the agent must NOT invent a shared
+    // file (a server/router/root config) outside its lane, it must plug in by
+    // convention. This is the fix for convergent out-of-lane drift.
+    expect(joined).toContain("HARD BOUNDARY");
+    expect(joined.toLowerCase()).toContain("self-contained");
+    expect(joined.toLowerCase()).toContain("plug in by convention");
   });
 
   it("omits the lane/root restriction for a single agent (empty allowedFiles)", () => {
@@ -224,6 +231,8 @@ describe("agentCommandBuilder", () => {
     // a single agent owns the whole repo - it MUST be free to touch the root
     expect(joined).not.toContain("YOUR LANE");
     expect(joined.toLowerCase()).not.toContain("repository root");
+    // ...and must NOT get the hard-boundary clause, which only applies to lanes
+    expect(joined).not.toContain("HARD BOUNDARY");
   });
 });
 
@@ -316,5 +325,39 @@ describe("parseTriageResponse", () => {
     const d = parseTriageResponse("no json here", "PLAN");
     expect(d.mode).toBe("single");
     expect(d.subtasks[0]!.instructions).toBe("PLAN");
+  });
+
+  it("parses an integration task when the judge emits one; defaults to null otherwise", () => {
+    const withInt = parseTriageResponse(
+      `{"mode":"split","reason":"r","subtasks":[{"slug":"a","title":"A","instructions":"i","allowedFiles":["pages/a/**"]},{"slug":"b","title":"B","instructions":"i","allowedFiles":["pages/b/**"]}],"integration":{"title":"server","instructions":"serve both pages"}}`,
+      "PLAN",
+    );
+    expect(withInt.integration?.instructions).toBe("serve both pages");
+    const without = parseTriageResponse(
+      `{"mode":"split","reason":"r","subtasks":[{"slug":"a","title":"A","instructions":"i","allowedFiles":["pages/a/**"]}],"hotspotFiles":[]}`,
+      "PLAN",
+    );
+    expect(without.integration).toBeNull();
+  });
+});
+
+describe("buildIntegrationPrompt", () => {
+  it("tells the integrator to read the real pieces, wire (not rewrite), and commit", () => {
+    const prompt = buildIntegrationPrompt({
+      repoDir: "/tmp/intg",
+      plan: "build two pages served by one server",
+      instructions: "add a server that serves both pages",
+      mergedSlugs: ["login", "dashboard"],
+    });
+    expect(prompt).toContain("INTEGRATION step");
+    expect(prompt).toContain("add a server that serves both pages");
+    // context: the pieces it must wire and the plan
+    expect(prompt).toContain("login");
+    expect(prompt).toContain("dashboard");
+    expect(prompt).toContain("build two pages served by one server");
+    // behavior: read the real pieces, connect not rewrite, commit
+    expect(prompt.toLowerCase()).toContain("read");
+    expect(prompt.toLowerCase()).toContain("do not rewrite");
+    expect(prompt.toLowerCase()).toContain("commit");
   });
 });

@@ -4,7 +4,7 @@
 
 summon-agents turns one approved plan into a team of AI coding agents that build it in parallel — each in its own isolated git worktree — then merges their work back and hands you the result, right from your editor's chat.
 
-Works in **Claude Code**, **VS Code (Copilot)**, and **Cursor**.
+Works in **Claude Code**, **VS Code (Copilot)**, **Cursor**, and **OpenAI Codex**.
 
 ---
 
@@ -96,7 +96,10 @@ It splits the work, runs the agents, merges the result, and tells you exactly ho
 2. **Dispatch** — one agent per task, each in its own `git worktree`, running **headless**. No mid-task prompts. That's the whole point — you leave.
 3. **Watchdog** — a hard per-agent timeout plus a no-progress detector kill any agent that hangs or loops. A run can't stall forever waiting on nothing.
 4. **Guardrails before anything merges** — did an agent touch files outside its lane? Does your repo's **own** check (`typecheck` / `build` / `test`) still pass? A clean git merge isn't enough; the code has to actually work.
-5. **Merge & report** — good work lands on your branch (or is pushed to your remote for a PR/MR); broken work stops and tells you why.
+5. **Integration pass** - the parallel agents each built blind (each saw only its own lane), so anything that ties the finished pieces together - one server for several pages, a router that composes independently-built features - can't be written correctly inside any single lane. When the plan needs that shared glue, a single integration agent runs *last*, in a worktree holding every merged piece, reads the real routes/exports the pieces expose, and wires them to match - once, with full sight, instead of each lane inventing its own copy and colliding. Then your repo's checks run on the wired result. Independent lanes that need no glue skip this entirely.
+6. **Merge & report** — good work lands on your branch (or is pushed to your remote for a PR/MR); broken work stops and tells you why.
+
+If a run stops for a human because agents wandered outside their lanes, it doesn't just dead-end. It **parks the clean, in-lane work on a side branch** (nothing good is lost), then hands you a **decision-point**: what stayed clean, what's contested and which agents built it (flagging the tell-tale case where they *all* invented the same shared file), your base branch untouched, and plain-language options to pick from - so you resolve it as a *decision*, not by reading diffs. Pick one, re-summon, done. Want to look anyway? `summon-agents open <slug>` is right there.
 
 And there's always a kill switch: `summon-agents abort <runId>` (or the `summon_abort` tool) stops a run and cleans up, anytime.
 
@@ -122,7 +125,7 @@ While it runs, `open` attaches you to the live pane (Ctrl-b d to detach). Once i
 
 **Want to steer them live?** By default agents run unattended (you watch, and resume-to-chat after). Add `--attended` (`summon-agents run --plan plan.md --attended`, requires tmux) to run the agents **interactively** instead: attach with `open`, jump in and redirect them mid-task, then exit an agent when you're happy and the pipeline merges its work. This trades away the "walk away" guarantee on purpose - it's for when you want your hands on the wheel.
 
-This works the same **across every vendor** - Claude, Cursor, or Copilot workers - because it reads the run's git/worktree state, not any vendor's output. The window looks identical no matter who's cooking.
+This works the same **across every vendor** - Claude, Cursor, Copilot, or Codex workers - because it reads the run's git/worktree state, not any vendor's output. The window looks identical no matter who's cooking.
 
 **Without leaving your cockpit:** when you summon from your editor chat, summon-agents also streams the play-by-play back inline via MCP progress notifications (the split, each agent finishing, and a periodic heartbeat with live file counts). Whether it renders live is up to your editor. And when you run it straight from a terminal with `summon-agents run`, that same heartbeat prints in the terminal you're already in - no second window needed.
 

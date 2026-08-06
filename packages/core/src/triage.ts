@@ -33,6 +33,7 @@ export function singleDecision(plan: string, reason: string): TriageDecision {
     ],
     hotspotFiles: [],
     preInstall: [],
+    integration: null,
   };
 }
 
@@ -121,10 +122,11 @@ export function normalizeDecision(
   const parsed = TriageDecisionSchema.parse(raw);
   const subtasks = dedupeSlugs(parsed.subtasks);
 
-  // The brake: not enough to split, or explicitly single => one agent.
+  // The brake: not enough to split, or explicitly single => one agent. A single
+  // agent owns the whole plan, so there is no separate integration step.
   if (parsed.mode === "single" || subtasks.length <= 1) {
     if (subtasks.length === 1) {
-      return { ...parsed, mode: "single", subtasks };
+      return { ...parsed, mode: "single", subtasks, integration: null };
     }
     return singleDecision(plan, parsed.reason || "not worth splitting");
   }

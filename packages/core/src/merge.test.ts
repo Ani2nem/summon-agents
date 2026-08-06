@@ -178,6 +178,127 @@ describe("runMerge", () => {
     expect(outcome.status).toBe("merged");
   });
 
+  it("integration step: wires the shared surface once, seeing every merged lane, and it lands validated", async () => {
+    // The repo's own check passes ONLY if the shared server exists alongside both
+    // pages - so validation would FAIL without integration, proving the wiring
+    // ran before the gate.
+    await commitFile(
+      repo,
+      "package.json",
+      JSON.stringify({ name: "t", scripts: { typecheck: "node check.js" } }),
+    );
+    await commitFile(
+      repo,
+      "check.js",
+      `const fs=require("fs");process.exit(fs.existsSync("server.js")&&fs.existsSync("pages/a.txt")&&fs.existsSync("pages/b.txt")?0:1);`,
+    );
+
+    // Two independent page lanes - neither builds the shared server.
+    const a = await makeLane(repo, "login", { "pages/a.txt": "login page\n" });
+    const b = await makeLane(repo, "dash", { "pages/b.txt": "dashboard page\n" });
+
+    let sawBothPieces = false;
+    let sawSlugs: string[] = [];
+    const integratingJudge: Judge = {
+      async triage() {
+        throw new Error("unused");
+      },
+      async resolveConflict() {
+        return false;
+      },
+      async integrate(ctx) {
+        // It must run in a tree that already contains BOTH lanes' work.
+        sawBothPieces =
+          (await fileOnDisk(ctx.repoDir, "pages/a.txt")) &&
+          (await fileOnDisk(ctx.repoDir, "pages/b.txt"));
+        sawSlugs = ctx.mergedSlugs;
+        await fs.writeFile(
+          path.join(ctx.repoDir, "server.js"),
+          "// serves pages/a.txt and pages/b.txt\n",
+        );
+        return true;
+      },
+    };
+
+    const outcome = await runMerge({
+      repoRoot: repo,
+      runId,
+      baseBranch: "main",
+      targets: [a, b],
+      judge: integratingJudge,
+      plan: "build two pages served by one server",
+      integration: { title: "shared server", instructions: "serve both pages" },
+    });
+
+    expect(sawBothPieces).toBe(true); // integrator saw the finished pieces
+    expect(sawSlugs.sort()).toEqual(["dash", "login"]);
+    expect(outcome.status).toBe("merged");
+    expect(outcome.validation.ran).toBe(true);
+    expect(outcome.validation.ok).toBe(true);
+    // The wired server is part of the deliverable on the integration branch.
+    await git(repo, ["checkout", outcome.integrationBranch]);
+    expect(await fileOnDisk(repo, "server.js")).toBe(true);
+    await git(repo, ["checkout", "main"]);
+    // The integrator's worktree is cleaned up, base untouched.
+    expect(await fileOnDisk(repo, "server.js")).toBe(false);
+  });
+
+  it("integration step: gives up (returns false) -> needsHuman, base clean", async () => {
+    const a = await makeLane(repo, "login", { "pages/a.txt": "login\n" });
+    const givingUpJudge: Judge = {
+      async triage() {
+        throw new Error("unused");
+      },
+      async resolveConflict() {
+        return false;
+      },
+      async integrate() {
+        return false; // cannot wire it
+      },
+    };
+
+    const outcome = await runMerge({
+      repoRoot: repo,
+      runId,
+      baseBranch: "main",
+      targets: [a],
+      judge: givingUpJudge,
+      plan: "p",
+      integration: { title: "shared server", instructions: "serve the page" },
+    });
+
+    expect(outcome.status).toBe("needsHuman");
+    expect(outcome.reason).toMatch(/integration/i);
+    // Base is a clean checkout of main, no worktree or branch left dangling in it.
+    await git(repo, ["checkout", "main"]);
+    expect(await git(repo, ["status", "--porcelain"])).toBe("");
+  });
+
+  it("no integration task: behaves exactly as before (skips the step)", async () => {
+    const a = await makeLane(repo, "a", { "src/a.ts": "export const a=1;\n" });
+    // A judge whose integrate would throw if ever called - it must NOT be called.
+    const judge: Judge = {
+      async triage() {
+        throw new Error("unused");
+      },
+      async resolveConflict() {
+        return false;
+      },
+      async integrate() {
+        throw new Error("integrate must not run without an integration task");
+      },
+    };
+    const outcome = await runMerge({
+      repoRoot: repo,
+      runId,
+      baseBranch: "main",
+      targets: [a],
+      judge,
+      integration: null,
+    });
+    expect(outcome.status).toBe("merged");
+  });
+
   it("aborts to needsHuman when a conflict is left unresolved, base clean", async () => {
     await commitFile(repo, "shared.txt", "base\n");
     const a = await makeLane(repo, "a", { "shared.txt": "from-a\n" });

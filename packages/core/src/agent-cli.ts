@@ -12,7 +12,13 @@
 
 import { execa } from "execa";
 import type { AgentCommand } from "./dispatch.js";
-import type { ConflictContext, Judge, Subtask, TriageDecision } from "./ports.js";
+import type {
+  ConflictContext,
+  IntegrationContext,
+  Judge,
+  Subtask,
+  TriageDecision,
+} from "./ports.js";
 import { TriageDecisionSchema } from "./ports.js";
 import { singleDecision } from "./triage.js";
 
@@ -223,7 +229,8 @@ Respond with ONLY a JSON object (no prose, no code fence) matching:
     { "slug": "kebab-case", "title": "...", "instructions": "the slice of the plan for this task", "allowedFiles": ["glob or path", ...] }
   ],
   "hotspotFiles": ["package.json", ...],
-  "preInstall": ["dependency", ...]
+  "preInstall": ["dependency", ...],
+  "integration": { "title": "...", "instructions": "the shared surface to wire up once every lane is built" }
 }
 
 Rules:
@@ -232,6 +239,11 @@ Rules:
 - allowedFiles is each task's disjoint lane. Do not let two tasks share a code file.
 - COVER THE WHOLE PLAN. Every file the plan says to create or modify must be owned by exactly one subtask's allowedFiles. Never drop a planned change.
 - Shared CODE files that need real edits (an entry point like index.js, a barrel/index, a shared types file, a router that wires features together) are NOT hotspots. Assign such a file - and the wiring work for it - to exactly ONE subtask (typically the task it most depends on), or keep the whole plan as a single agent if the wiring cannot be cleanly assigned. Do not leave wiring unowned.
+- Watch for an IMPLIED shared foundation the plan does not spell out. A set of otherwise-independent lanes (several pages, several services, several commands) usually needs ONE shared piece nobody named: an entry point, a dev/HTTP server, a router, a top-level layout or config. Never leave each lane to invent it - every agent would create its own copy and they would collide. Handle it in ONE of two ways:
+  - If the shared file can be written correctly BLIND (just imports/wiring the plan already fully specifies, without needing to see the other lanes' internals), assign it to exactly ONE lane's allowedFiles.
+  - If the shared surface can only be built correctly once the OTHER pieces exist (a server that must serve each lane's real routes, a router that composes features you have to read first, an app shell that mounts independently-built components), do NOT put it in a lane. Describe it in "integration" instead. That step runs LAST, in a worktree containing every merged lane, so it can read the real pieces and wire them together. Prefer this whenever the glue depends on the pieces.
+- "integration" is for SPLIT runs only, and only when such shared glue is actually needed; use null when the lanes are truly independent. Do NOT list lane files there - the integration step sees the whole tree. Keep its instructions specific: what to create/wire and how the pieces connect.
+- If a shared foundation can be handled by neither a single lane nor an integration step, keep the whole plan as a SINGLE agent instead of splitting.
 - Only put files that need NO real logic edits - manifests, lockfiles, generated schemas - in hotspotFiles.
 - GREENFIELD/EMPTY repos (the plan note will say so): every split lane MUST be a self-contained SUBDIRECTORY that owns everything under it - its own code AND its own package.json/config/lockfile (e.g. "frontend/**", "backend/**"). Do NOT split repository-ROOT setup across lanes: two agents both scaffolding at the root collide. If the plan needs shared repo-root setup (a root workspace/monorepo package.json, root tooling config), either keep the whole plan as a SINGLE agent, or hand that root setup to exactly ONE lane. When the bootstrap is small or the pieces share root scaffolding, prefer "single".
 - Before responding, check: does the union of all subtasks' allowedFiles cover every file the plan mentions? If not, fix the split or use "single".`;
@@ -303,7 +315,7 @@ function buildTaskPrompt(subtask: Subtask): string {
           .map((f) => `- ${f}`)
           .join(
             "\n",
-          )}\n\nIf you need to initialize or scaffold (npm init, create-vite, framework or project generators, etc.), do it INSIDE your lane directory - create the directory and run the tool there (e.g. \`mkdir -p <your-lane-dir> && cd <your-lane-dir>\`) or point the generator at that path. Never run a scaffolder at the repository root. Every file you create must live under one of the lane paths above.`
+          )}\n\nHARD BOUNDARY: The paths above are the ONLY files you may create or modify. Everything else in this repository is either owned by another agent running in parallel right now, or intentionally does not exist yet. If your task SEEMS to need a file outside your lane - a shared server, a router, an entry point, a top-level config, or anything at the repository root - DO NOT create it. Build your piece to be self-contained and to plug in by convention (serve from your own directory, export a module others can import, read config from your own subtree). Do not add a server, build tooling, or wiring that other lanes would share unless one of the paths above explicitly covers it. If you genuinely cannot complete the task without a file outside your lane, STOP and explain exactly what you need in your final message - do NOT create it. Creating any file outside your lane causes the ENTIRE run to be rejected before merge, so all the other agents' work is wasted too.\n\nIf you need to initialize or scaffold (npm init, create-vite, framework or project generators, etc.), do it INSIDE your lane directory - create the directory and run the tool there (e.g. \`mkdir -p <your-lane-dir> && cd <your-lane-dir>\`) or point the generator at that path. Never run a scaffolder at the repository root. Every file you create must live under one of the lane paths above.`
       : "";
   return `You are implementing ONE task directly in the current working directory (a git worktree). Make the changes here, then commit them with git. Work autonomously - do not ask for confirmation or wait for input.
 
@@ -315,6 +327,34 @@ ${subtask.instructions}${lane}
 - Write the code, then COMMIT it with git as soon as the implementation is complete - commit BEFORE any optional verification, so your work is never lost.
 - Do NOT run heavy or manual verification yourself: no browser / end-to-end testing, no long-running servers (\`npm start\`, dev servers), no large simulation gauntlets. The orchestrator runs the project's own typecheck / build / test on the merged result - that is where validation happens, not here. A quick local sanity check is fine; extensive verification is not your job and it makes the run look stalled.
 - Keep making steady, visible progress. If you finish early, commit and stop rather than polishing indefinitely.`;
+}
+
+/**
+ * Build the prompt for the final integration pass. The pieces already exist in
+ * the working directory (a worktree with every merged lane); the integrator's
+ * job is to WIRE them, not rewrite them - read the real routes/exports they
+ * expose and build the shared surface to match, then commit.
+ */
+export function buildIntegrationPrompt(ctx: IntegrationContext): string {
+  const pieces =
+    ctx.mergedSlugs.length > 0
+      ? `\n\n# The pieces already built and merged here\n${ctx.mergedSlugs
+          .map((s) => `- ${s}`)
+          .join("\n")}`
+      : "";
+  return `You are the INTEGRATION step of a parallel build, working directly in the current directory (a git worktree). Several agents each built one independent piece of the plan in isolation, and their work has ALREADY been merged together into this directory. None of them could build the SHARED surface that ties the pieces together, because each saw only its own piece. That shared wiring is your job. Work autonomously - do not ask for confirmation.
+
+# What to wire up
+${ctx.instructions}${pieces}
+
+## How to work (important)
+- The individual pieces already exist in this directory. READ them first - open the files each piece created and see the REAL routes, exports, file paths, and names they expose. Wire the shared surface to match what is actually there, not what you assume.
+- Do NOT rewrite or re-implement the pieces. Only add/adjust the shared glue that connects them (an entry point, a server, a router, a shared config). Touch a piece's own files only if the plan's wiring truly requires it.
+- COMMIT your work with git as soon as the wiring is complete.
+- Do NOT run long-running servers or heavy end-to-end checks - the orchestrator validates the result after you. A quick sanity check is fine.
+
+# Full plan (for context)
+${ctx.plan}`;
 }
 
 /** A Judge backed by a headless agent CLI (the configured vendor). */
@@ -343,6 +383,15 @@ export function agentJudge(cfg: AgentCliConfig): Judge {
         cwd: ctx.repoDir,
         reject: false,
       });
+      return res.exitCode === 0;
+    },
+
+    async integrate(ctx: IntegrationContext): Promise<boolean> {
+      const res = await execa(
+        cfg.bin,
+        agentRunArgs(cfg, buildIntegrationPrompt(ctx)),
+        { cwd: ctx.repoDir, reject: false },
+      );
       return res.exitCode === 0;
     },
   };

@@ -274,6 +274,12 @@ export async function cleanupRun(input: {
   // NOTE: the integration branch is intentionally NOT deleted here - it is the
   // reviewable deliverable (the PR head), or already fast-forwarded into base and
   // deleted explicitly by the caller in the no-remote path.
+  // The parked branch (out-of-lane recovery staging, summon/<runId>/parked) IS
+  // lane-like scratch, not a deliverable - delete it so it never lingers.
+  await deleteBranch({
+    repoDir: repoRoot,
+    branch: branchNameFor(state.runId, "parked"),
+  });
   await pruneWorktrees(repoRoot);
   // Remove the (now empty) per-run worktree directory if present.
   await fs.rm(path.join(worktreesRoot(repoRoot), state.runId), {

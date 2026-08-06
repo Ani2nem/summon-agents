@@ -13,6 +13,7 @@ import {
   commitAll,
   commitTracked,
   detectRunCommand,
+  parkLanes,
   runMerge,
   type MergeTarget,
 } from "./merge.js";
@@ -86,6 +87,40 @@ export function shouldPreInstall(
 const GREENFIELD_TRIAGE_NOTE =
   "NOTE: The repository is currently EMPTY / greenfield (no project manifest at the root). Apply the GREENFIELD rules: split only into self-contained subdirectory lanes that each own their own manifest/config, or keep the whole plan as a single agent - never split shared repository-root setup across lanes.";
 
+/** One file an agent changed outside its declared lane. */
+export interface ContestedFile {
+  /** The out-of-lane path. */
+  file: string;
+  /** The agents that touched it (sorted). */
+  slugs: string[];
+  /**
+   * True when two or more agents each created/edited this same out-of-lane file -
+   * a strong signal it is a shared foundation they all invented independently
+   * (e.g. every page agent made its own root server.js). This is the case an
+   * integration step is meant to own.
+   */
+  convergent: boolean;
+}
+
+/**
+ * The empowered handoff for an out-of-lane stop. Rather than a terse dead-end,
+ * this captures: what stayed clean (and where it was parked so it is not lost),
+ * what is contested (and by whom), and plain-language next steps the human can
+ * pick from - so a conflict is resolved as a DECISION, not by reading diffs. Base
+ * is always untouched; the parked branch and the agent worktrees are preserved
+ * for inspection (`summon-agents open <slug>`).
+ */
+export interface RecoveryPoint {
+  /** Lanes that stayed in-lane; their work was parked, nothing lost. */
+  cleanSlugs: string[];
+  /** Branch holding the parked clean lanes (disjoint, merged), or null if none. */
+  parkedBranch: string | null;
+  /** Files edited outside a lane, and which agents touched each. */
+  contested: ContestedFile[];
+  /** Plain-language next steps for the human/chat to choose from. */
+  options: string[];
+}
+
 export interface PipelineResult {
   status: "skipped" | "completed" | "needsHuman" | "awaitingReview";
   runId: string;
@@ -99,6 +134,87 @@ export interface PipelineResult {
   pr?: PrResult;
   runCommand?: string | null;
   validationLabel?: string;
+  /**
+   * Present on an out-of-lane needsHuman: the structured decision-point (parked
+   * clean work + contested files + resolution options). Absent otherwise.
+   */
+  recovery?: RecoveryPoint;
+}
+
+/** Build the decision-point from the per-agent out-of-lane findings. */
+export function buildRecovery(
+  strayByRecord: { slug: string; stray: string[] }[],
+  cleanSlugs: string[],
+  parkedBranch: string | null,
+): RecoveryPoint {
+  const fileToSlugs = new Map<string, Set<string>>();
+  for (const { slug, stray } of strayByRecord) {
+    for (const f of stray) {
+      const set = fileToSlugs.get(f) ?? new Set<string>();
+      set.add(slug);
+      fileToSlugs.set(f, set);
+    }
+  }
+  const contested: ContestedFile[] = [...fileToSlugs.entries()]
+    .map(([file, slugs]) => ({
+      file,
+      slugs: [...slugs].sort(),
+      convergent: slugs.size >= 2,
+    }))
+    .sort((a, b) => a.file.localeCompare(b.file));
+
+  const options: string[] = [];
+  const convergent = contested.filter((c) => c.convergent);
+  const solo = contested.filter((c) => !c.convergent);
+  if (convergent.length > 0) {
+    const files = convergent.map((c) => c.file).join(", ");
+    options.push(
+      `Build it ONCE as a shared foundation: re-summon and have a single integration step own ${files}, so it is created once for all lanes instead of each agent inventing its own.`,
+    );
+    options.push(
+      `Drop it: re-summon telling the agents to keep their lanes self-contained and NOT create ${files}.`,
+    );
+  }
+  for (const c of solo) {
+    options.push(
+      `${c.slugs[0]} edited ${c.file} outside its lane - re-summon with ${c.file} assigned to a single lane that owns it.`,
+    );
+  }
+  const firstStray = strayByRecord[0]?.slug;
+  if (firstStray) {
+    options.push(
+      `Look before deciding: summon-agents open ${firstStray} (inspect what an agent actually built).`,
+    );
+  }
+  return { cleanSlugs: [...cleanSlugs].sort(), parkedBranch, contested, options };
+}
+
+/** Render a decision-point as a readable block for the CLI / MCP report. */
+export function formatRecovery(r: RecoveryPoint): string {
+  const lines: string[] = ["", "What happened:"];
+  if (r.parkedBranch) {
+    lines.push(
+      `  clean work is safe - parked on branch ${r.parkedBranch}: ${r.cleanSlugs.join(", ")}`,
+    );
+  } else {
+    lines.push("  no fully in-lane work to park");
+  }
+  if (r.contested.length > 0) {
+    lines.push("  built outside any lane (not merged):");
+    for (const c of r.contested) {
+      const who = c.slugs.join(", ");
+      const note = c.convergent
+        ? ` (all of them made their own - a shared piece nobody owned)`
+        : "";
+      lines.push(`    ${c.file}  <-  ${who}${note}`);
+    }
+  }
+  lines.push("  your base branch: untouched");
+  if (r.options.length > 0) {
+    lines.push("", "How to resolve (pick one, then re-summon):");
+    for (const o of r.options) lines.push(`  - ${o}`);
+  }
+  return lines.join("\n");
 }
 
 export interface PipelineDeps {
@@ -261,8 +377,9 @@ export async function runPipeline(
     // only touched files in its declared lane. An agent that wandered outside its
     // lane - or clobbered a reserved manifest - is flagged before we merge.
     const bySlug = new Map(decision.subtasks.map((s) => [s.slug, s]));
-    const violations: string[] = [];
     const producedFiles = new Set<string>();
+    const cleanTargets: MergeTarget[] = [];
+    const strayByRecord: { slug: string; stray: string[] }[] = [];
     for (const record of records) {
       await commitAll(record.worktree, `summon: ${record.slug} work`).catch(
         () => false,
@@ -277,16 +394,42 @@ export async function runPipeline(
       for (const f of changed) producedFiles.add(f);
       const stray = outOfLaneFiles(subtask, changed);
       if (stray.length > 0) {
-        violations.push(`${record.slug} edited outside its lane: ${stray.join(", ")}`);
+        strayByRecord.push({ slug: record.slug, stray });
+      } else {
+        cleanTargets.push({
+          slug: record.slug,
+          branch: record.branch,
+          worktree: record.worktree,
+        });
       }
     }
-    if (violations.length > 0) {
+    if (strayByRecord.length > 0) {
+      // The empowered handoff: don't just dead-end. Park the clean, in-lane work
+      // on a side branch (so nothing good is lost), then hand back a structured
+      // decision-point - what's clean, what's contested, and how to resolve it -
+      // instead of a bare "not merging". Base stays untouched; worktrees are
+      // preserved (needsHuman never triggers cleanup) for `open <slug>`.
+      const parkedBranch = await parkLanes({
+        repoRoot,
+        runId,
+        baseBranch,
+        targets: cleanTargets,
+      });
+      const recovery = buildRecovery(
+        strayByRecord,
+        cleanTargets.map((t) => t.slug),
+        parkedBranch,
+      );
+      const violations = strayByRecord.map(
+        (r) => `${r.slug} edited outside its lane: ${r.stray.join(", ")}`,
+      );
       state = await setRunStatus({ repoRoot, state, status: "needsHuman" });
       return {
         status: "needsHuman",
         runId,
         reason: `out-of-lane edits detected; not merging: ${violations.join("; ")}`,
         decision,
+        recovery,
       };
     }
 
@@ -321,6 +464,10 @@ export async function runPipeline(
       targets,
       judge,
       hotspotFiles: decision.hotspotFiles,
+      plan: state.plan,
+      // Integration is a split-only step: a single agent already owns the whole
+      // tree, so there is nothing separate to wire.
+      integration: decision.mode === "split" ? decision.integration : null,
       notifier,
     });
 

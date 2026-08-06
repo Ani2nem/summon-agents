@@ -21,6 +21,7 @@ import {
   findLatestRun,
   formatProgress,
   formatProgressLine,
+  formatRecovery,
   gc,
   isTerminal,
   loadRun,
@@ -32,7 +33,7 @@ import {
   type RunState,
 } from "@summon-agents/core";
 
-const VERSION = "0.7.0";
+const VERSION = "0.8.0";
 
 type TextResult = {
   content: { type: "text"; text: string }[];
@@ -71,7 +72,18 @@ function formatResult(lines: string[], result: PipelineResult): string {
       `HUMAN REVIEW REQUIRED - do NOT finalize this yourself. Present the diff above to the user and WAIT for the user to explicitly say to merge. Only after the user approves, call summon_merge with runId "${result.runId}". If the user wants to discard, call summon_abort. Do not call summon_merge based on your own judgment.`,
     );
   }
-  if (result.status === "needsHuman" || result.status === "awaitingReview") {
+  if (result.recovery) {
+    // The structured decision-point: parked clean work, contested files, and
+    // plain-language options the chat can present so the user resolves this as a
+    // decision, not by reading diffs.
+    out.push(formatRecovery(result.recovery));
+    out.push(
+      "Present the options above to the user, let THEM pick, then re-summon with their choice. Do not decide for them.",
+    );
+  } else if (
+    result.status === "needsHuman" ||
+    result.status === "awaitingReview"
+  ) {
     out.push("to inspect an agent: summon-agents open <slug>");
   }
   return out.join("\n");
