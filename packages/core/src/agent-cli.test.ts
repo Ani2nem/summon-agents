@@ -66,10 +66,13 @@ describe("agentConfigFromEnv", () => {
 });
 
 describe("agentRunArgs (per-vendor headless flags)", () => {
-  it("claude uses --permission-mode, or the skip flag under yolo", () => {
+  it("claude uses --permission-mode, or the skip flag under yolo, and always --strict-mcp-config", () => {
     const base = { vendor: "claude" as const, bin: "claude", permissionMode: "bypassPermissions", skipPermissions: false };
-    expect(agentRunArgs(base, "hi")).toEqual(["-p", "hi", "--permission-mode", "bypassPermissions"]);
-    expect(agentRunArgs({ ...base, skipPermissions: true }, "hi")).toEqual(["-p", "hi", "--dangerously-skip-permissions"]);
+    // --strict-mcp-config is mandatory: it stops a headless worker from booting
+    // summon-agents' OWN MCP server (registered in the repo's .mcp.json by init)
+    // and hanging on its trust gate.
+    expect(agentRunArgs(base, "hi")).toEqual(["-p", "hi", "--strict-mcp-config", "--permission-mode", "bypassPermissions"]);
+    expect(agentRunArgs({ ...base, skipPermissions: true }, "hi")).toEqual(["-p", "hi", "--strict-mcp-config", "--dangerously-skip-permissions"]);
   });
 
   it("cursor uses --force to auto-approve", () => {
@@ -92,7 +95,7 @@ describe("agentInteractiveArgs (per-vendor interactive/attended flags)", () => {
   it("claude seeds the prompt + --permission-mode, no headless -p", () => {
     const cfg = { vendor: "claude" as const, bin: "claude", permissionMode: "bypassPermissions", skipPermissions: false };
     const args = agentInteractiveArgs(cfg, "hi");
-    expect(args).toEqual(["hi", "--permission-mode", "bypassPermissions"]);
+    expect(args).toEqual(["hi", "--strict-mcp-config", "--permission-mode", "bypassPermissions"]);
     expect(args).toContain("hi");
     expect(args).not.toContain("-p");
   });

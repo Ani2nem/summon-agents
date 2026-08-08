@@ -99,7 +99,9 @@ It splits the work, runs the agents, merges the result, and tells you exactly ho
 5. **Integration pass** - the parallel agents each built blind (each saw only its own lane), so anything that ties the finished pieces together - one server for several pages, a router that composes independently-built features - can't be written correctly inside any single lane. When the plan needs that shared glue, a single integration agent runs *last*, in a worktree holding every merged piece, reads the real routes/exports the pieces expose, and wires them to match - once, with full sight, instead of each lane inventing its own copy and colliding. Then your repo's checks run on the wired result. Independent lanes that need no glue skip this entirely.
 6. **Merge & report** — good work lands on your branch (or is pushed to your remote for a PR/MR); broken work stops and tells you why.
 
-If a run stops for a human because agents wandered outside their lanes, it doesn't just dead-end. It **parks the clean, in-lane work on a side branch** (nothing good is lost), then hands you a **decision-point**: what stayed clean, what's contested and which agents built it (flagging the tell-tale case where they *all* invented the same shared file), your base branch untouched, and plain-language options to pick from - so you resolve it as a *decision*, not by reading diffs. Pick one, re-summon, done. Want to look anyway? `summon-agents open <slug>` is right there.
+If a run stops for a human - an agent **failed or hung**, or **wandered outside its lane** - it doesn't dead-end. It **parks the clean, in-lane work on a side branch** (nothing good is lost) and hands you a **decision-point**: what's parked, what failed or is contested and which agents (flagging the tell-tale case where they *all* invented the same shared file), your base branch untouched, and plain-language next steps - so you resolve it as a *decision*, not by reading diffs.
+
+You fix agents **one at a time**: `summon-agents fix <slug> "<what to change>"` (or the `summon_resolve` tool from chat) re-runs *just that agent* with your correction - ideal for one that hung and produced nothing to resume. The others stay parked, and the moment every agent is clean it merges, validates, and lands. No re-running the whole thing. Want to look first? `summon-agents open <slug>` is right there.
 
 And there's always a kill switch: `summon-agents abort <runId>` (or the `summon_abort` tool) stops a run and cleans up, anytime.
 
@@ -137,6 +139,7 @@ The same engine runs from the terminal — for hooks, scripts, or by hand:
 summon-agents run --plan plan.md            # run a plan
 summon-agents run --plan plan.md --review   # hold the merge for your approval
 summon-agents run --plan plan.md --attended # run agents interactively so you can steer them (needs tmux)
+summon-agents fix <slug> "<correction>"      # re-run one stuck/failed agent with a fix, then continue
 summon-agents watch                         # live view of the current run's agents
 summon-agents status                        # one-shot snapshot of the current run
 summon-agents open [agent]                  # attach to / resume-chat an agent (needs tmux)

@@ -7,6 +7,7 @@ import {
   finalizeRun,
   formatRecovery,
   isGreenfield,
+  resolveAgent,
   runPipeline,
   shouldPreInstall,
 } from "./orchestrate.js";
@@ -593,6 +594,66 @@ describe("runPipeline (end to end with fakes)", () => {
     );
     expect(result.status).toBe("completed");
     expect(result.reason).not.toMatch(/preinstall|install/i);
+  });
+
+  it("resolve loop: a failed agent is fixed in place, then the whole run lands", async () => {
+    // "api" succeeds. "auth" fails on its first run and succeeds on the retry
+    // (gated by a marker in its run dir, which survives the lane teardown).
+    const runner = new ExecAgentRunner(({ subtask, runDir }) => {
+      if (subtask.slug === "api") {
+        return {
+          command: process.execPath,
+          args: [
+            "-e",
+            `const fs=require("fs");fs.mkdirSync("src/api",{recursive:true});fs.writeFileSync("src/api/index.ts","export const api=1;\\n");`,
+          ],
+        };
+      }
+      const marker = path.join(runDir, "attempted");
+      return {
+        command: process.execPath,
+        args: [
+          "-e",
+          `const fs=require("fs");const m=${JSON.stringify(marker)};` +
+            `if(fs.existsSync(m)){fs.mkdirSync("src/auth",{recursive:true});fs.writeFileSync("src/auth/index.ts","export const auth=1;\\n");}` +
+            `else{fs.writeFileSync(m,"1");process.exit(1);}`,
+        ],
+      };
+    });
+    const deps = {
+      judge: splittingJudge(split2),
+      runner,
+      vcs: noRemoteVcs,
+      notifier: silentNotifier(),
+    };
+
+    // First pass: auth fails -> decision-point (auth listed as failed, api parked).
+    const first = await runPipeline(repo, "Build auth and api", deps, {
+      runId: "pipe-resolve",
+      watch: { intervalMs: 50 },
+    });
+    expect(first.status).toBe("needsHuman");
+    expect(first.recovery).toBeDefined();
+    expect(first.recovery!.failed.map((f) => f.slug)).toEqual(["auth"]);
+    expect(first.recovery!.cleanSlugs).toEqual(["api"]);
+    // The failed lane did NOT land; base is clean.
+    const { git } = await import("./worktree.js");
+    await git(repo, ["checkout", "main"]);
+    expect(await exists(path.join(repo, "src/auth/index.ts"))).toBe(false);
+
+    // Resolve: re-run just auth with a fix -> it passes -> the whole run lands.
+    const fixed = await resolveAgent({
+      repoRoot: repo,
+      slug: "auth",
+      fix: "create src/auth/index.ts",
+      runId: "pipe-resolve",
+      deps,
+      options: { watch: { intervalMs: 50 } },
+    });
+    expect(fixed.status).toBe("completed");
+    await git(repo, ["checkout", "main"]);
+    expect(await exists(path.join(repo, "src/auth/index.ts"))).toBe(true);
+    expect(await exists(path.join(repo, "src/api/index.ts"))).toBe(true);
   });
 
   it("brake: a single-mode decision runs one agent (no fan-out)", async () => {

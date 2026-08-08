@@ -7,7 +7,14 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { dispatchDecision, awaitRun, type WatchOptions } from "./dispatch.js";
+import {
+  dispatchDecision,
+  awaitRun,
+  loadAgents,
+  readAgentResult,
+  saveAgents,
+  type WatchOptions,
+} from "./dispatch.js";
 import { outOfLaneFiles } from "./decompose.js";
 import {
   commitAll,
@@ -21,25 +28,39 @@ import { integrationBranchName } from "./merge.js";
 import { landOnRemote, preflight } from "./pr.js";
 import { installDependencies } from "./validate.js";
 import type {
+  AgentRecord,
+  AgentResult,
   AgentRunner,
   Judge,
   Notifier,
   PrResult,
+  RunState,
+  Subtask,
   TriageDecision,
   Vcs,
 } from "./ports.js";
 import {
   acquireLock,
+  agentRunDir,
+  branchNameFor,
   createRun,
+  findLatestRun,
   loadRun,
   newRunId,
   releaseLock,
   saveRun,
   setRunStatus,
+  worktreePathFor,
 } from "./run.js";
 import { runTriage } from "./triage.js";
-import { tmuxAvailable } from "./session.js";
-import { changedFilesVsBase, deleteBranch, git } from "./worktree.js";
+import { killSession, sessionName, tmuxAvailable } from "./session.js";
+import {
+  changedFilesVsBase,
+  deleteBranch,
+  git,
+  pruneWorktrees,
+  removeWorktree,
+} from "./worktree.js";
 
 /** Root project manifests. Their absence means the repo needs scaffolding. */
 const ROOT_MANIFESTS = [
@@ -110,6 +131,13 @@ export interface ContestedFile {
  * is always untouched; the parked branch and the agent worktrees are preserved
  * for inspection (`summon-agents open <slug>`).
  */
+export interface FailedAgent {
+  /** The agent that errored or was reaped. */
+  slug: string;
+  /** Why it did not finish cleanly (error summary / reap reason). */
+  reason: string;
+}
+
 export interface RecoveryPoint {
   /** Lanes that stayed in-lane; their work was parked, nothing lost. */
   cleanSlugs: string[];
@@ -117,6 +145,8 @@ export interface RecoveryPoint {
   parkedBranch: string | null;
   /** Files edited outside a lane, and which agents touched each. */
   contested: ContestedFile[];
+  /** Agents that errored or were reaped (each is fixable with `fix <slug>`). */
+  failed: FailedAgent[];
   /** Plain-language next steps for the human/chat to choose from. */
   options: string[];
 }
@@ -141,11 +171,12 @@ export interface PipelineResult {
   recovery?: RecoveryPoint;
 }
 
-/** Build the decision-point from the per-agent out-of-lane findings. */
+/** Build the decision-point from the per-agent findings (failures + out-of-lane). */
 export function buildRecovery(
   strayByRecord: { slug: string; stray: string[] }[],
   cleanSlugs: string[],
   parkedBranch: string | null,
+  failed: FailedAgent[] = [],
 ): RecoveryPoint {
   const fileToSlugs = new Map<string, Set<string>>();
   for (const { slug, stray } of strayByRecord) {
@@ -164,6 +195,12 @@ export function buildRecovery(
     .sort((a, b) => a.file.localeCompare(b.file));
 
   const options: string[] = [];
+  // Failed/stuck agents come first: each is fixable in place with `fix`.
+  for (const f of failed) {
+    options.push(
+      `${f.slug} did not finish (${f.reason}) - send it a fix and re-run just this agent: summon-agents fix ${f.slug} "<what to change>" (or the summon_resolve tool). The others stay parked until it is green.`,
+    );
+  }
   const convergent = contested.filter((c) => c.convergent);
   const solo = contested.filter((c) => !c.convergent);
   if (convergent.length > 0) {
@@ -180,13 +217,19 @@ export function buildRecovery(
       `${c.slugs[0]} edited ${c.file} outside its lane - re-summon with ${c.file} assigned to a single lane that owns it.`,
     );
   }
-  const firstStray = strayByRecord[0]?.slug;
-  if (firstStray) {
+  const firstSlug = failed[0]?.slug ?? strayByRecord[0]?.slug;
+  if (firstSlug) {
     options.push(
-      `Look before deciding: summon-agents open ${firstStray} (inspect what an agent actually built).`,
+      `Look before deciding: summon-agents open ${firstSlug} (inspect what an agent actually built).`,
     );
   }
-  return { cleanSlugs: [...cleanSlugs].sort(), parkedBranch, contested, options };
+  return {
+    cleanSlugs: [...cleanSlugs].sort(),
+    parkedBranch,
+    contested,
+    failed,
+    options,
+  };
 }
 
 /** Render a decision-point as a readable block for the CLI / MCP report. */
@@ -198,6 +241,10 @@ export function formatRecovery(r: RecoveryPoint): string {
     );
   } else {
     lines.push("  no fully in-lane work to park");
+  }
+  if (r.failed.length > 0) {
+    lines.push("  did not finish (fixable in place):");
+    for (const f of r.failed) lines.push(`    ${f.slug}  <-  ${f.reason}`);
   }
   if (r.contested.length > 0) {
     lines.push("  built outside any lane (not merged):");
@@ -211,7 +258,7 @@ export function formatRecovery(r: RecoveryPoint): string {
   }
   lines.push("  your base branch: untouched");
   if (r.options.length > 0) {
-    lines.push("", "How to resolve (pick one, then re-summon):");
+    lines.push("", "How to resolve (do one at a time):");
     for (const o of r.options) lines.push(`  - ${o}`);
   }
   return lines.join("\n");
@@ -360,159 +407,323 @@ export async function runPipeline(
       onTick: options.onTick,
     });
 
-    const failed = [...results.values()].filter((r) => r.status === "error");
-    if (failed.length > 0) {
-      state = await setRunStatus({ repoRoot, state, status: "needsHuman" });
-      return {
-        status: "needsHuman",
-        runId,
-        reason: `${failed.length} agent(s) did not finish cleanly: ${failed
-          .map((f) => f.slug)
-          .join(", ")}`,
-        decision,
-      };
-    }
+    // Everything from here (backstop -> park/recovery -> merge -> integrate ->
+    // validate -> finalize) is the re-entrant tail: `resolveAgent` runs it again
+    // after re-dispatching a fixed agent, so it lives in continueRun.
+    return await continueRun({
+      repoRoot,
+      state,
+      records,
+      results,
+      deps: { judge, vcs, notifier },
+      options: { review: options.review },
+    });
+  } finally {
+    await releaseLock(repoRoot);
+  }
+}
 
-    // Out-of-lane backstop (loophole C): commit each agent's work, then verify it
-    // only touched files in its declared lane. An agent that wandered outside its
-    // lane - or clobbered a reserved manifest - is flagged before we merge.
-    const bySlug = new Map(decision.subtasks.map((s) => [s.slug, s]));
-    const producedFiles = new Set<string>();
-    const cleanTargets: MergeTarget[] = [];
-    const strayByRecord: { slug: string; stray: string[] }[] = [];
-    for (const record of records) {
-      await commitAll(record.worktree, `summon: ${record.slug} work`).catch(
-        () => false,
-      );
-      const subtask = bySlug.get(record.slug);
-      if (!subtask) continue;
-      const changed = await changedFilesVsBase(
-        repoRoot,
-        baseBranch,
-        record.branch,
-      );
-      for (const f of changed) producedFiles.add(f);
-      const stray = outOfLaneFiles(subtask, changed);
-      if (stray.length > 0) {
-        strayByRecord.push({ slug: record.slug, stray });
-      } else {
-        cleanTargets.push({
-          slug: record.slug,
-          branch: record.branch,
-          worktree: record.worktree,
-        });
-      }
-    }
-    if (strayByRecord.length > 0) {
-      // The empowered handoff: don't just dead-end. Park the clean, in-lane work
-      // on a side branch (so nothing good is lost), then hand back a structured
-      // decision-point - what's clean, what's contested, and how to resolve it -
-      // instead of a bare "not merging". Base stays untouched; worktrees are
-      // preserved (needsHuman never triggers cleanup) for `open <slug>`.
-      const parkedBranch = await parkLanes({
-        repoRoot,
-        runId,
-        baseBranch,
-        targets: cleanTargets,
+/**
+ * The post-dispatch tail of a run, made re-entrant so it can run again after a
+ * fix. Given the agents' results, it: partitions them into failed / out-of-lane /
+ * clean; if any agent is not cleanly done it parks the clean work and returns the
+ * decision-point (needsHuman); otherwise it runs the no-op guard, the boss merge +
+ * integration + validation gate, and finalizes (or holds for review). Assumes the
+ * run lock is already held by the caller.
+ */
+export async function continueRun(input: {
+  repoRoot: string;
+  state: RunState;
+  records: AgentRecord[];
+  results: Map<string, AgentResult>;
+  deps: { judge: Judge; vcs: Vcs; notifier: Notifier };
+  options?: { review?: boolean };
+}): Promise<PipelineResult> {
+  const { repoRoot, records, results, deps, options = {} } = input;
+  const { judge, vcs, notifier } = deps;
+  let state = input.state;
+  const runId = state.runId;
+  const baseBranch = state.baseBranch;
+  const decision = state.decision;
+  if (!decision) {
+    return { status: "needsHuman", runId, reason: "run has no triage decision" };
+  }
+
+  // Partition every agent into: failed (errored / reaped), contested (succeeded
+  // but edited outside its lane), or clean (succeeded, in-lane). Only clean lanes
+  // are eligible to merge or park.
+  const bySlug = new Map(decision.subtasks.map((s) => [s.slug, s]));
+  const producedFiles = new Set<string>();
+  const cleanTargets: MergeTarget[] = [];
+  const strayByRecord: { slug: string; stray: string[] }[] = [];
+  const failed: FailedAgent[] = [];
+  for (const record of records) {
+    const result = results.get(record.slug);
+    if (!result || result.status === "error") {
+      failed.push({
+        slug: record.slug,
+        reason: result?.summary || "did not finish",
       });
-      const recovery = buildRecovery(
-        strayByRecord,
-        cleanTargets.map((t) => t.slug),
-        parkedBranch,
-      );
-      const violations = strayByRecord.map(
-        (r) => `${r.slug} edited outside its lane: ${r.stray.join(", ")}`,
-      );
-      state = await setRunStatus({ repoRoot, state, status: "needsHuman" });
-      return {
-        status: "needsHuman",
-        runId,
-        reason: `out-of-lane edits detected; not merging: ${violations.join("; ")}`,
-        decision,
-        recovery,
-      };
+      continue; // never park/merge a failed agent's (likely empty) branch
     }
-
-    // No-op guard: every agent can exit 0 having produced nothing (e.g. a
-    // sandboxed CLI that couldn't act, or one that just asked a question). A
-    // clean merge of empty branches + a trivially-passing validation would
-    // otherwise report "completed" on a run that changed nothing. Catch it.
-    if (producedFiles.size === 0) {
-      state = await setRunStatus({ repoRoot, state, status: "needsHuman" });
-      return {
-        status: "needsHuman",
-        runId,
-        reason:
-          "agents produced no file changes - nothing to merge. The worker agent likely could not act; check .summon-agents/runs/" +
-          `${runId}/<slug>/stdout.log for what each agent did.`,
-        decision,
-      };
+    await commitAll(record.worktree, `summon: ${record.slug} work`).catch(
+      () => false,
+    );
+    const subtask = bySlug.get(record.slug);
+    if (!subtask) continue;
+    const changed = await changedFilesVsBase(repoRoot, baseBranch, record.branch);
+    for (const f of changed) producedFiles.add(f);
+    const stray = outOfLaneFiles(subtask, changed);
+    if (stray.length > 0) {
+      strayByRecord.push({ slug: record.slug, stray });
+    } else {
+      cleanTargets.push({
+        slug: record.slug,
+        branch: record.branch,
+        worktree: record.worktree,
+      });
     }
+  }
 
-    // Boss merge + validation gate.
-    state = { ...state, status: "merging" };
-    await saveRun(repoRoot, state);
-    const targets: MergeTarget[] = records.map((r) => ({
-      slug: r.slug,
-      branch: r.branch,
-      worktree: r.worktree,
-    }));
-    const merge = await runMerge({
+  // Any agent not cleanly done -> the empowered handoff. Park the clean, in-lane
+  // work on a side branch (nothing good is lost) and return the decision-point:
+  // what's parked, what failed, what's contested, and how to fix each. Base stays
+  // untouched; worktrees are preserved (needsHuman never triggers cleanup).
+  if (failed.length > 0 || strayByRecord.length > 0) {
+    const parkedBranch = await parkLanes({
       repoRoot,
       runId,
       baseBranch,
-      targets,
-      judge,
-      hotspotFiles: decision.hotspotFiles,
-      plan: state.plan,
-      // Integration is a split-only step: a single agent already owns the whole
-      // tree, so there is nothing separate to wire.
-      integration: decision.mode === "split" ? decision.integration : null,
+      targets: cleanTargets,
+    });
+    const recovery = buildRecovery(
+      strayByRecord,
+      cleanTargets.map((t) => t.slug),
+      parkedBranch,
+      failed,
+    );
+    const parts: string[] = [];
+    if (failed.length > 0) {
+      parts.push(
+        `${failed.length} agent(s) did not finish: ${failed.map((f) => f.slug).join(", ")}`,
+      );
+    }
+    if (strayByRecord.length > 0) {
+      parts.push(
+        `out-of-lane edits: ${strayByRecord.map((r) => `${r.slug} -> ${r.stray.join(", ")}`).join("; ")}`,
+      );
+    }
+    state = await setRunStatus({ repoRoot, state, status: "needsHuman" });
+    return {
+      status: "needsHuman",
+      runId,
+      reason: `stopped for you: ${parts.join(" | ")}. Fix each agent in place with \`summon-agents fix <slug> "..."\` (or the summon_resolve tool).`,
+      decision,
+      recovery,
+    };
+  }
+
+  // No-op guard: every agent can exit 0 having produced nothing (e.g. a sandboxed
+  // CLI that couldn't act, or one that just asked a question). A clean merge of
+  // empty branches + a trivially-passing validation would otherwise report
+  // "completed" on a run that changed nothing. Catch it.
+  if (producedFiles.size === 0) {
+    state = await setRunStatus({ repoRoot, state, status: "needsHuman" });
+    return {
+      status: "needsHuman",
+      runId,
+      reason:
+        "agents produced no file changes - nothing to merge. The worker agent likely could not act; check .summon-agents/runs/" +
+        `${runId}/<slug>/stdout.log for what each agent did.`,
+      decision,
+    };
+  }
+
+  // Boss merge + validation gate. All agents are clean at this point, so
+  // cleanTargets is the full set to merge.
+  state = { ...state, status: "merging" };
+  await saveRun(repoRoot, state);
+  const merge = await runMerge({
+    repoRoot,
+    runId,
+    baseBranch,
+    targets: cleanTargets,
+    judge,
+    hotspotFiles: decision.hotspotFiles,
+    plan: state.plan,
+    // Integration is a split-only step: a single agent already owns the whole
+    // tree, so there is nothing separate to wire.
+    integration: decision.mode === "split" ? decision.integration : null,
+    notifier,
+  });
+
+  if (merge.status === "needsHuman") {
+    state = await setRunStatus({ repoRoot, state, status: "needsHuman" });
+    return {
+      status: "needsHuman",
+      runId,
+      reason: merge.reason,
+      decision,
+      mergedSlugs: merge.mergedSlugs,
+      validationLabel: merge.validation.label,
+    };
+  }
+
+  // The review gate: work is merged + validated on the integration branch, but the
+  // user asked to approve before it lands. Stop here (base untouched, nothing
+  // pushed) and hand off; the caller finalizes later via finalizeRun.
+  if (options.review) {
+    state = await setRunStatus({ repoRoot, state, status: "awaitingReview" });
+    notifier.info(
+      `review gate: ${merge.mergedSlugs.length} task(s) merged + validated on ${merge.integrationBranch}. STOP and hand control to the human: show them the diff (git diff ${baseBranch}...${merge.integrationBranch}) and wait for THEIR explicit approval. Do NOT finalize on your own.`,
+    );
+    return {
+      status: "awaitingReview",
+      runId,
+      reason:
+        "HUMAN REVIEW REQUIRED. Merged + validated on the integration branch, but NOT finalized. Present the diff to the user and wait for the user's explicit go-ahead. Do NOT call summon_merge / finalize yourself - only after the human approves.",
+      decision,
+      mergedSlugs: merge.mergedSlugs,
+      landedOn: merge.integrationBranch,
+      integrationBranch: merge.integrationBranch,
+      validationLabel: merge.validation.label,
+    };
+  }
+
+  // Default: finalize immediately (auto-merge / PR).
+  const result = await finalizeRun(repoRoot, runId, { vcs, notifier });
+  return { ...result, validationLabel: merge.validation.label };
+}
+
+/**
+ * Re-run ONE agent with a human's correction, then continue the run. This is the
+ * cockpit resolve loop: the fix is appended to that agent's task, its lane is torn
+ * down and re-dispatched fresh (ideal for an agent that hung and produced nothing
+ * to resume), and once it finishes continueRun re-checks EVERY agent - landing the
+ * run if all are now clean, or handing back an updated decision-point if others
+ * still need fixing. You resolve agents one at a time. Defaults to the latest run
+ * that needs a human.
+ */
+export async function resolveAgent(input: {
+  repoRoot: string;
+  slug: string;
+  fix: string;
+  runId?: string;
+  deps: PipelineDeps;
+  options?: { review?: boolean; watch?: WatchOptions; onTick?: () => void | Promise<void> };
+}): Promise<PipelineResult> {
+  const { repoRoot, slug, fix, deps } = input;
+  const { judge, runner, vcs, notifier } = deps;
+  const options = input.options ?? {};
+
+  const state = input.runId
+    ? await loadRun(repoRoot, input.runId)
+    : await findLatestRun(repoRoot, (s) => s.status === "needsHuman");
+  if (!state) {
+    return {
+      status: "needsHuman",
+      runId: input.runId ?? "",
+      reason: input.runId
+        ? `no such run: ${input.runId}`
+        : "no run is waiting for a human to resolve",
+    };
+  }
+  const runId = state.runId;
+  const decision = state.decision;
+  const subtask = decision?.subtasks.find((s) => s.slug === slug);
+  if (!decision || !subtask) {
+    return {
+      status: "needsHuman",
+      runId,
+      reason: `no agent "${slug}" in run ${runId}`,
+    };
+  }
+
+  if (!(await acquireLock(repoRoot, runId))) {
+    return {
+      status: "skipped",
+      runId,
+      reason: "another summon-agents run is already active",
+    };
+  }
+  try {
+    const baseBranch = state.baseBranch;
+    // Fold the human's correction into the task and re-dispatch this one lane.
+    const fixedSubtask: Subtask = {
+      ...subtask,
+      instructions: `${subtask.instructions}\n\n## Correction from the human (address this specifically)\n${fix}`,
+    };
+
+    notifier.info(`re-running ${slug} with your fix`);
+    const priorRecords = await loadAgents(repoRoot, runId);
+    await teardownAgent(repoRoot, runId, slug);
+
+    const dispatched = await dispatchDecision({
+      repoRoot,
+      runId,
+      baseBranch,
+      decision: { ...decision, subtasks: [fixedSubtask] },
+      runner,
       notifier,
     });
+    const fixedRecord = dispatched[0]!;
+    // dispatchDecision overwrote agents.json with just this one - restore the full
+    // set, swapping in the freshly dispatched record for this slug.
+    const allRecords: AgentRecord[] = priorRecords.some((r) => r.slug === slug)
+      ? priorRecords.map((r) => (r.slug === slug ? fixedRecord : r))
+      : [...priorRecords, fixedRecord];
+    await saveAgents(repoRoot, runId, allRecords);
+    await setRunStatus({ repoRoot, state, status: "dispatched" });
 
-    if (merge.status === "needsHuman") {
-      state = await setRunStatus({ repoRoot, state, status: "needsHuman" });
-      return {
-        status: "needsHuman",
-        runId,
-        reason: merge.reason,
-        decision,
-        mergedSlugs: merge.mergedSlugs,
-        validationLabel: merge.validation.label,
-      };
+    // Wait for just the re-run agent; the others already have their results.
+    await awaitRun({
+      repoRoot,
+      runId,
+      records: [fixedRecord],
+      notifier,
+      options: options.watch,
+      onTick: options.onTick,
+    });
+
+    // Re-collect every agent's result and continue the run.
+    const results = new Map<string, AgentResult>();
+    for (const r of allRecords) {
+      const res = await readAgentResult(repoRoot, runId, r.slug);
+      if (res) results.set(r.slug, res);
     }
-
-    // The review gate: work is merged + validated on the integration branch, but
-    // the user asked to approve before it lands. Stop here (base untouched, nothing
-    // pushed) and hand off; the caller finalizes later via finalizeRun.
-    if (options.review) {
-      state = await setRunStatus({
-        repoRoot,
-        state,
-        status: "awaitingReview",
-      });
-      notifier.info(
-        `review gate: ${merge.mergedSlugs.length} task(s) merged + validated on ${merge.integrationBranch}. STOP and hand control to the human: show them the diff (git diff ${baseBranch}...${merge.integrationBranch}) and wait for THEIR explicit approval. Do NOT finalize on your own.`,
-      );
-      return {
-        status: "awaitingReview",
-        runId,
-        reason:
-          "HUMAN REVIEW REQUIRED. Merged + validated on the integration branch, but NOT finalized. Present the diff to the user and wait for the user's explicit go-ahead. Do NOT call summon_merge / finalize yourself - only after the human approves.",
-        decision,
-        mergedSlugs: merge.mergedSlugs,
-        landedOn: merge.integrationBranch,
-        integrationBranch: merge.integrationBranch,
-        validationLabel: merge.validation.label,
-      };
-    }
-
-    // Default: finalize immediately (auto-merge / PR), identical to before.
-    const result = await finalizeRun(repoRoot, runId, { vcs, notifier });
-    return { ...result, validationLabel: merge.validation.label };
+    return await continueRun({
+      repoRoot,
+      state,
+      records: allRecords,
+      results,
+      deps: { judge, vcs, notifier },
+      options: { review: options.review },
+    });
   } finally {
     await releaseLock(repoRoot);
+  }
+}
+
+/**
+ * Tear down one agent's lane so it can be re-dispatched cleanly: kill its tmux
+ * session, remove its worktree and branch, and delete its stale result/logs (so
+ * the supervisor waits for the NEW result, not the old failure).
+ */
+async function teardownAgent(
+  repoRoot: string,
+  runId: string,
+  slug: string,
+): Promise<void> {
+  if (await tmuxAvailable()) await killSession(sessionName(runId, slug));
+  await removeWorktree({
+    repoDir: repoRoot,
+    worktreePath: worktreePathFor(repoRoot, runId, slug),
+  });
+  await pruneWorktrees(repoRoot);
+  await deleteBranch({ repoDir: repoRoot, branch: branchNameFor(runId, slug) });
+  const rDir = agentRunDir(repoRoot, runId, slug);
+  for (const f of ["result.json", "stdout.log", "stderr.log"]) {
+    await fs.rm(path.join(rDir, f), { force: true }).catch(() => {});
   }
 }
 

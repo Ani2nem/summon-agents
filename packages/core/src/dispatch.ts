@@ -351,6 +351,19 @@ async function readResult(
   }
 }
 
+/**
+ * Read one agent's persisted result.json (or null if absent). Exported so a
+ * re-entrant continue (`resolveAgent` -> `continueRun`) can re-collect the
+ * results of agents that already finished in a prior pass.
+ */
+export async function readAgentResult(
+  repoRoot: string,
+  runId: string,
+  slug: string,
+): Promise<AgentResult | null> {
+  return readResult(repoRoot, runId, slug);
+}
+
 /** Newest mtime (ms) across the agent's log files and its worktree (2 levels). */
 export async function newestActivityMs(
   runDirPath: string,

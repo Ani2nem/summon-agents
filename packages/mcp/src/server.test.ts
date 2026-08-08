@@ -71,6 +71,7 @@ describe("summon-agents MCP server", () => {
       "summon_agents",
       "summon_gc",
       "summon_merge",
+      "summon_resolve",
       "summon_status",
     ]);
     await client.close();

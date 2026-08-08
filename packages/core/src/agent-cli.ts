@@ -67,13 +67,24 @@ const VENDORS: Record<AgentVendor, VendorProfile> = {
     runArgs: (prompt, cfg) => [
       "-p",
       prompt,
+      // Ignore the project's .mcp.json. Workers (and the Judge) run inside repos
+      // that ran `summon-agents init`, whose .mcp.json registers summon-agents'
+      // OWN MCP server. Without this, a headless `claude` boots that server in a
+      // fresh, untrusted worktree, blocks on its trust gate, produces zero output,
+      // and gets reaped for no-progress. `--strict-mcp-config` with no
+      // `--mcp-config` loads NO MCP servers - which is what a headless coding
+      // worker wants anyway. (Other vendors have the same footgun via their own
+      // config; fixed here for the verified claude path first.)
+      "--strict-mcp-config",
       ...(cfg.skipPermissions
         ? ["--dangerously-skip-permissions"]
         : ["--permission-mode", cfg.permissionMode]),
     ],
-    // EXPERIMENTAL: interactive TUI seeded with the prompt (no `-p`).
+    // EXPERIMENTAL: interactive TUI seeded with the prompt (no `-p`). Also skips
+    // the project MCP so an attended worker doesn't recursively load summon-agents.
     interactiveArgs: (prompt, cfg) => [
       prompt,
+      "--strict-mcp-config",
       "--permission-mode",
       cfg.permissionMode,
     ],

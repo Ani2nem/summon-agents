@@ -25,6 +25,7 @@ import {
   gc,
   isTerminal,
   loadRun,
+  resolveAgent,
   runPipeline,
   setRunStatus,
   type AgentResult,
@@ -33,7 +34,7 @@ import {
   type RunState,
 } from "@summon-agents/core";
 
-const VERSION = "0.8.0";
+const VERSION = "0.9.0";
 
 type TextResult = {
   content: { type: "text"; text: string }[];
@@ -186,6 +187,54 @@ export function createServer(repoRoot: string = process.cwd()): McpServer {
           },
         },
       );
+      return text(formatResult(lines, result), result.status === "needsHuman");
+    },
+  );
+
+  server.registerTool(
+    "summon_resolve",
+    {
+      title: "Fix and re-run one stuck or failed agent",
+      description:
+        "After a run stops with needsHuman, re-run ONE agent with the user's correction, then continue the run (merge + validate + land if every agent is now clean). Use a slug from the decision-point's failed/contested list. Resolve agents ONE AT A TIME: pass the user's fix for the first, and if others still need fixing you'll get an updated decision-point to resolve next. The fix text is the user's instruction to that agent - do not invent it; ask the user what to change if unclear.",
+      inputSchema: {
+        slug: z
+          .string()
+          .describe("The agent to re-run (a slug from the decision-point)."),
+        fix: z
+          .string()
+          .min(1)
+          .describe(
+            "The user's correction for that agent - what to change or do differently.",
+          ),
+        runId: z
+          .string()
+          .optional()
+          .describe("Run id, or omit for the latest run needing a human."),
+      },
+    },
+    async ({ slug, fix, runId }) => {
+      const cfg = agentConfigFromEnv();
+      if (!(await agentAvailable(cfg))) {
+        return text(
+          `agent CLI "${cfg.bin}" (vendor: ${cfg.vendor}) not found on PATH.`,
+          true,
+        );
+      }
+      const lines: string[] = [];
+      const result = await resolveAgent({
+        repoRoot,
+        slug,
+        fix,
+        runId,
+        deps: {
+          judge: agentJudge(cfg),
+          runner: new ExecAgentRunner(agentCommandBuilder(cfg)),
+          vcs: new GhVcs(),
+          notifier: collectingNotifier(lines),
+        },
+        options: {},
+      });
       return text(formatResult(lines, result), result.status === "needsHuman");
     },
   );

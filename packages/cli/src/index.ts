@@ -20,6 +20,7 @@ import {
   latestRunId,
   loadAgents,
   loadRun,
+  resolveAgent,
   runIsActive,
   runPipeline,
   setRunStatus,
@@ -42,7 +43,7 @@ const program = new Command();
 program
   .name("summon-agents")
   .description("Zero-setup orchestrator for parallel AI coding agents")
-  .version("0.8.0");
+  .version("0.9.0");
 
 program
   .command("run")
@@ -102,6 +103,49 @@ program
       },
     );
 
+    printResult(result);
+    process.exit(result.status === "needsHuman" ? 1 : 0);
+  });
+
+program
+  .command("fix <slug> <instruction...>")
+  .description("Re-run one stuck/failed agent with a correction, then continue the run")
+  .option("--vendor <vendor>", "worker agent vendor (claude|cursor|copilot|codex)")
+  .option("--review", "hold the merge for your review after the fix lands")
+  .option("--run <runId>", "target run (defaults to the latest run needing a human)")
+  .action(async (slug: string, instruction: string[], opts) => {
+    const repoRoot = process.cwd();
+    const cfg = agentConfigFromEnv(
+      opts.vendor
+        ? { ...process.env, SUMMON_AGENT_VENDOR: opts.vendor }
+        : process.env,
+    );
+    if (!(await agentAvailable(cfg))) {
+      process.stderr.write(
+        `summon-agents: agent CLI "${cfg.bin}" not found on PATH. ` +
+          `Set SUMMON_AGENT_BIN or install it.\n`,
+      );
+      process.exit(1);
+    }
+    const result = await resolveAgent({
+      repoRoot,
+      slug,
+      fix: instruction.join(" "),
+      runId: opts.run,
+      deps: {
+        judge: agentJudge(cfg),
+        runner: new ExecAgentRunner(agentCommandBuilder(cfg)),
+        vcs: new GhVcs(),
+        notifier: stdoutNotifier(),
+      },
+      options: {
+        review: Boolean(opts.review),
+        onTick: async () => {
+          const p = await collectProgress(repoRoot);
+          if (p) process.stdout.write(`  … ${formatProgressLine(p)}\n`);
+        },
+      },
+    });
     printResult(result);
     process.exit(result.status === "needsHuman" ? 1 : 0);
   });
@@ -179,7 +223,7 @@ program
   )
   .action(async (target: string | undefined) => {
     const repoRoot = process.cwd();
-    const resolved = await resolveAgent(repoRoot, target);
+    const resolved = await resolveAgentTarget(repoRoot, target);
     if ("error" in resolved) {
       process.stderr.write(`summon-agents: ${resolved.error}\n`);
       process.exit(1);
@@ -274,7 +318,7 @@ program
  * slug (against the latest run), a `<runId>/<slug>` pair, or omitted (the latest
  * run, requiring it to have exactly one agent).
  */
-async function resolveAgent(
+async function resolveAgentTarget(
   repoRoot: string,
   target: string | undefined,
 ): Promise<{ runId: string; record: AgentRecord } | { error: string }> {
