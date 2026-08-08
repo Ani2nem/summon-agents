@@ -60,6 +60,7 @@ import {
   git,
   pruneWorktrees,
   removeWorktree,
+  workingTreeChanges,
 } from "./worktree.js";
 
 /** Root project manifests. Their absence means the repo needs scaffolding. */
@@ -312,6 +313,21 @@ export async function runPipeline(
   if (pf.baselineCommitted) notifier.info("created a baseline commit");
   const baseBranch = pf.baseBranch;
 
+  // Set expectations up front: agents run in worktrees forked from your last
+  // commit (HEAD), so uncommitted changes to TRACKED files are invisible to them.
+  // This is the #1 source of confusing runs - e.g. you delete the app in your
+  // working tree but never commit it, so the agents' worktree still has the old
+  // committed version and either redo nothing or rebuild on top of it. Warn, don't
+  // block: benign unrelated edits shouldn't stop a run. (Checked AFTER preflight so
+  // a greenfield baseline commit isn't flagged.)
+  const dirty = (await workingTreeChanges(repoRoot)).tracked;
+  if (dirty.length > 0) {
+    const sample = dirty.slice(0, 5).join(", ");
+    notifier.info(
+      `heads up: ${dirty.length} uncommitted change(s) to tracked files will NOT be seen by the agents - each works in a worktree forked from your last commit (HEAD). Commit or stash them first if the agents should build on them. (${sample}${dirty.length > 5 ? ", …" : ""})`,
+    );
+  }
+
   const runId = options.runId ?? newRunId();
 
   // Idempotency: if another run holds the lock, do nothing (loophole D).
@@ -528,13 +544,23 @@ export async function continueRun(input: {
   // empty branches + a trivially-passing validation would otherwise report
   // "completed" on a run that changed nothing. Catch it.
   if (producedFiles.size === 0) {
+    // A common cause: your base (HEAD) already contains the planned work because
+    // uncommitted changes in your working tree (e.g. deletions) were never
+    // committed, so the agents' worktree still has the old committed version and
+    // found nothing to do. Surface that possibility instead of only blaming the CLI.
+    const dirty = (await workingTreeChanges(repoRoot)).tracked;
+    const dirtyHint =
+      dirty.length > 0
+        ? ` NOTE: you have ${dirty.length} uncommitted change(s) to tracked files that the agents never saw (worktrees fork from HEAD) - your base may already contain the planned work. Check \`git status\` and \`git log\`; commit those changes (or \`git checkout -- .\` to restore) before re-running.`
+        : "";
     state = await setRunStatus({ repoRoot, state, status: "needsHuman" });
     return {
       status: "needsHuman",
       runId,
       reason:
         "agents produced no file changes - nothing to merge. The worker agent likely could not act; check .summon-agents/runs/" +
-        `${runId}/<slug>/stdout.log for what each agent did.`,
+        `${runId}/<slug>/stdout.log for what each agent did.` +
+        dirtyHint,
       decision,
     };
   }

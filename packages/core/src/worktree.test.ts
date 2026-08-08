@@ -8,11 +8,13 @@ import {
   branchExists,
   currentBranch,
   deleteBranch,
+  git,
   hasCommits,
   initRepo,
   isGitRepo,
   listWorktrees,
   removeWorktree,
+  workingTreeChanges,
 } from "./worktree.js";
 
 describe("worktree", () => {
@@ -28,6 +30,25 @@ describe("worktree", () => {
     expect(await isGitRepo(repo)).toBe(true);
     expect(await hasCommits(repo)).toBe(true);
     expect(await currentBranch(repo)).toBe("main");
+  });
+
+  it("workingTreeChanges splits tracked edits/deletions from untracked files", async () => {
+    await fs.writeFile(path.join(repo, "tracked.txt"), "v1\n");
+    await git(repo, ["add", "tracked.txt"]);
+    await git(repo, ["commit", "-m", "add tracked"]);
+    // clean tree
+    expect((await workingTreeChanges(repo)).tracked).toEqual([]);
+
+    // modify a tracked file + create a brand-new (untracked) one
+    await fs.writeFile(path.join(repo, "tracked.txt"), "v2\n");
+    await fs.writeFile(path.join(repo, "brand-new.txt"), "x\n");
+    const changes = await workingTreeChanges(repo);
+    expect(changes.tracked).toContain("tracked.txt");
+    expect(changes.untracked).toContain("brand-new.txt");
+
+    // a deletion of a tracked file counts as a tracked change (the dangerous kind)
+    await fs.rm(path.join(repo, "tracked.txt"));
+    expect((await workingTreeChanges(repo)).tracked).toContain("tracked.txt");
   });
 
   it("init + baselineCommit brings a greenfield dir to a branchable state", async () => {

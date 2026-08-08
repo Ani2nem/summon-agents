@@ -173,6 +173,34 @@ export async function changedFilesVsBase(
   return out.split("\n").filter(Boolean);
 }
 
+/**
+ * Uncommitted changes in the main working tree, split by whether git already
+ * tracks the file. This matters because dispatched agents run in worktrees forked
+ * from the last commit (HEAD) - so ANY of these changes are invisible to them.
+ * Modifications/deletions to TRACKED files are the dangerous kind (the agent sees
+ * the OLD, committed version); untracked files are merely additive.
+ */
+export async function workingTreeChanges(
+  repoDir: string,
+): Promise<{ tracked: string[]; untracked: string[] }> {
+  // Use raw execa output, NOT the git() helper: git() trims the whole string,
+  // which would strip the leading status space off the first porcelain line and
+  // shift every field by one. Porcelain v1 is "XY<space>path" per line.
+  const { stdout } = await execa("git", ["status", "--porcelain"], {
+    cwd: repoDir,
+  });
+  const tracked: string[] = [];
+  const untracked: string[] = [];
+  for (const line of stdout.split("\n")) {
+    if (line === "") continue;
+    const code = line.slice(0, 2);
+    const file = line.slice(3);
+    if (code === "??") untracked.push(file);
+    else tracked.push(file);
+  }
+  return { tracked, untracked };
+}
+
 /** Delete a local branch. `force` uses -D. No-op if the branch is gone. */
 export async function deleteBranch(input: {
   repoDir: string;

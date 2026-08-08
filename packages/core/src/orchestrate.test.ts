@@ -656,6 +656,35 @@ describe("runPipeline (end to end with fakes)", () => {
     expect(await exists(path.join(repo, "src/api/index.ts"))).toBe(true);
   });
 
+  it("warns up front when the working tree has uncommitted tracked changes (agents won't see them)", async () => {
+    const { commitFile } = await import("./testkit.js");
+    await commitFile(repo, "readme.txt", "v1\n");
+    // an uncommitted edit to a tracked file - invisible to worktrees forked from HEAD
+    await fs.writeFile(path.join(repo, "readme.txt"), "v2 uncommitted\n");
+    const msgs: string[] = [];
+    const notifier: Notifier = {
+      info: (m) => msgs.push(m),
+      agentDone() {},
+      runDone() {},
+    };
+    await runPipeline(
+      repo,
+      "Build auth and api",
+      {
+        judge: splittingJudge(split2),
+        runner: writingRunner(),
+        vcs: noRemoteVcs,
+        notifier,
+      },
+      { runId: "pipe-dirty", watch: { intervalMs: 50 } },
+    );
+    expect(
+      msgs.some(
+        (m) => /uncommitted change/i.test(m) && /HEAD/.test(m) && /readme\.txt/.test(m),
+      ),
+    ).toBe(true);
+  });
+
   it("brake: a single-mode decision runs one agent (no fan-out)", async () => {
     const single: TriageDecision = {
       mode: "single",
