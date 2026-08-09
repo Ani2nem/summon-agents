@@ -28,13 +28,14 @@ import {
   resolveAgent,
   runPipeline,
   setRunStatus,
+  unsupportedVendorReason,
   type AgentResult,
   type Notifier,
   type PipelineResult,
   type RunState,
 } from "@summon-agents/core";
 
-const VERSION = "0.9.4";
+const VERSION = "0.9.5";
 
 type TextResult = {
   content: { type: "text"; text: string }[];
@@ -121,6 +122,8 @@ export function createServer(repoRoot: string = process.cwd()): McpServer {
     },
     async ({ plan, review, attended }, extra) => {
       const cfg = agentConfigFromEnv();
+      const unsupported = unsupportedVendorReason(cfg);
+      if (unsupported) return text(unsupported, true);
       if (!(await agentAvailable(cfg))) {
         return text(
           `agent CLI "${cfg.bin}" (vendor: ${cfg.vendor}) not found on PATH. ` +
@@ -215,6 +218,8 @@ export function createServer(repoRoot: string = process.cwd()): McpServer {
     },
     async ({ slug, fix, runId }) => {
       const cfg = agentConfigFromEnv();
+      const unsupported = unsupportedVendorReason(cfg);
+      if (unsupported) return text(unsupported, true);
       if (!(await agentAvailable(cfg))) {
         return text(
           `agent CLI "${cfg.bin}" (vendor: ${cfg.vendor}) not found on PATH.`,

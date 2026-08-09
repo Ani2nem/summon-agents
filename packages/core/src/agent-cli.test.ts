@@ -11,6 +11,7 @@ import {
   parseSessionId,
   parseTriageResponse,
   resumeCommand,
+  unsupportedVendorReason,
 } from "./agent-cli.js";
 
 describe("agentConfigFromEnv", () => {
@@ -62,6 +63,35 @@ describe("agentConfigFromEnv", () => {
     expect(normalizeVendor("github-copilot")).toBe("copilot");
     expect(normalizeVendor("codex")).toBe("codex");
     expect(normalizeVendor("openai")).toBe("codex");
+  });
+});
+
+describe("unsupportedVendorReason (fast, honest failure vs a silent hang)", () => {
+  const cfg = (vendor: AgentCliConfig["vendor"]): AgentCliConfig => ({
+    vendor,
+    bin: vendor,
+    permissionMode: "bypassPermissions",
+    skipPermissions: false,
+  });
+
+  it("refuses cursor by default (would recursively boot the MCP and hang)", () => {
+    const reason = unsupportedVendorReason(cfg("cursor"), {} as NodeJS.ProcessEnv);
+    expect(reason).toMatch(/cursor/i);
+    expect(reason).toMatch(/claude/i); // points at a working vendor
+  });
+
+  it("lets cursor through with the SUMMON_ALLOW_CURSOR=1 escape hatch", () => {
+    expect(
+      unsupportedVendorReason(cfg("cursor"), {
+        SUMMON_ALLOW_CURSOR: "1",
+      } as unknown as NodeJS.ProcessEnv),
+    ).toBeNull();
+  });
+
+  it("allows the supported vendors", () => {
+    for (const v of ["claude", "copilot", "codex"] as const) {
+      expect(unsupportedVendorReason(cfg(v), {} as NodeJS.ProcessEnv)).toBeNull();
+    }
   });
 });
 

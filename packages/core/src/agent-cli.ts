@@ -169,6 +169,32 @@ export function normalizeVendor(v: string | undefined): AgentVendor {
   }
 }
 
+/**
+ * Whether this vendor can be safely dispatched as a worker, or a reason to refuse
+ * (null = proceed). This is a FAST, honest failure in place of a bad one: cursor
+ * is refused by default because cursor-agent has no way to disable the project MCP
+ * registration, so each worker recursively boots summon-agents' own MCP server and
+ * hangs (the same footgun that bit claude, but with no `--strict-mcp-config`
+ * escape), and its headless `-p` mode has separate known hang bugs. Rather than
+ * let a cursor run hang for ~12 minutes and get reaped with no explanation, we stop
+ * up front and point the user at a vendor that works. SUMMON_ALLOW_CURSOR=1 opts
+ * back into trying it (experimental - it may still hang).
+ */
+export function unsupportedVendorReason(
+  cfg: AgentCliConfig,
+  env = process.env,
+): string | null {
+  if (cfg.vendor === "cursor" && env.SUMMON_ALLOW_CURSOR !== "1") {
+    return (
+      'vendor "cursor" is not supported for dispatched workers yet: cursor-agent has no ' +
+      "flag to disable the summon-agents MCP server, so each worker recursively boots it and " +
+      "hangs, and its headless mode has known hang bugs. Use --vendor claude (recommended) or " +
+      "copilot. To try cursor anyway, set SUMMON_ALLOW_CURSOR=1 (experimental - it may hang)."
+    );
+  }
+  return null;
+}
+
 export function agentConfigFromEnv(env = process.env): AgentCliConfig {
   const vendor = normalizeVendor(env.SUMMON_AGENT_VENDOR);
   return {

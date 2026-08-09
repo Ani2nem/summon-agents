@@ -35,6 +35,7 @@ import {
   parseSessionId,
   resolvePlan,
   resumeCommand,
+  unsupportedVendorReason,
 } from "./claude.js";
 import { stdoutNotifier } from "./notifier.js";
 
@@ -43,7 +44,7 @@ const program = new Command();
 program
   .name("summon-agents")
   .description("Zero-setup orchestrator for parallel AI coding agents")
-  .version("0.9.4");
+  .version("0.9.5");
 
 program
   .command("run")
@@ -60,6 +61,12 @@ program
         ? { ...process.env, SUMMON_AGENT_VENDOR: opts.vendor }
         : process.env,
     );
+
+    const unsupported = unsupportedVendorReason(cfg);
+    if (unsupported) {
+      process.stderr.write(`summon-agents: ${unsupported}\n`);
+      process.exit(1);
+    }
 
     // Resolve the plan from --plan, or fail.
     let plan: string | null = null;
@@ -120,6 +127,11 @@ program
         ? { ...process.env, SUMMON_AGENT_VENDOR: opts.vendor }
         : process.env,
     );
+    const unsupported = unsupportedVendorReason(cfg);
+    if (unsupported) {
+      process.stderr.write(`summon-agents: ${unsupported}\n`);
+      process.exit(1);
+    }
     if (!(await agentAvailable(cfg))) {
       process.stderr.write(
         `summon-agents: agent CLI "${cfg.bin}" not found on PATH. ` +

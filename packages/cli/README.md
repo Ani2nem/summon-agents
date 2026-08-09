@@ -64,7 +64,11 @@ If the CLI is missing you'll get a clear `agent CLI "<x>" (vendor: <y>) not foun
 
 The worker is a headless CLI, not the editor's chat pane (no editor exposes its in-chat agent to outside tools).
 Override the binary with `SUMMON_AGENT_BIN`, or force a vendor with `SUMMON_AGENT_VENDOR` / `--vendor`.
-Claude's CLI is the smoothest path; Cursor's is solid; Copilot's is newer, so treat it as experimental and verify its headless flags on your version.
+
+**Vendor support, honestly:**
+- **Claude** - fully supported and the recommended path (live-tested end to end).
+- **Copilot** and **Codex** - experimental. They run, but haven't been live-verified across versions - do a small run first and verify their headless flags on your version.
+- **Cursor** - **not yet supported for dispatched workers.** `cursor-agent` has no flag to ignore the project's MCP registration, so a worker recursively boots summon-agents' own MCP server and hangs, and its headless mode has separate known hang bugs. summon-agents stops up front with a clear message instead of letting a run hang. To experiment anyway, set `SUMMON_ALLOW_CURSOR=1` (it may still hang).
 
 ## Use it
 

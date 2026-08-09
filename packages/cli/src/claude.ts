@@ -12,6 +12,7 @@ export {
   agentInteractiveCommandBuilder,
   agentJudge,
   agentAvailable,
+  unsupportedVendorReason,
   normalizeVendor,
   parseTriageResponse,
   parseSessionId,
