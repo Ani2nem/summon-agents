@@ -100,27 +100,54 @@ const VENDORS: Record<AgentVendor, VendorProfile> = {
     versionArgs: ["--version"],
   },
   // GitHub Copilot CLI (newer / experimental). `-p` prompt, `--allow-all-tools`
-  // for unattended execution.
+  // for unattended execution. `--disable-builtin-mcps` drops the built-in github
+  // MCP server (a headless coding worker doesn't need it, and it avoids that
+  // server's startup/auth surface). Note: the copilot CLI reads MCP from its own
+  // ~/.copilot/mcp-config.json, NOT the project .vscode/mcp.json that init writes,
+  // so it does not recursively boot summon-agents' MCP the way `claude -p` did.
   copilot: {
     bin: "copilot",
-    runArgs: (prompt) => ["-p", prompt, "--allow-all-tools"],
+    runArgs: (prompt) => [
+      "-p",
+      prompt,
+      "--allow-all-tools",
+      "--disable-builtin-mcps",
+    ],
     // EXPERIMENTAL: interactive TUI seeded with the prompt (no `-p`).
-    interactiveArgs: (prompt) => [prompt, "--allow-all-tools"],
+    interactiveArgs: (prompt) => [
+      prompt,
+      "--allow-all-tools",
+      "--disable-builtin-mcps",
+    ],
     versionArgs: ["--version"],
   },
   // OpenAI Codex CLI. Headless mode is `codex exec "<prompt>"`;
   // `--dangerously-bypass-approvals-and-sandbox` gives full autonomy including
   // network access (safe here because workers run in isolated worktrees). Note:
   // `codex exec` streams its progress to stderr.
+  //
+  // Codex reads MCP servers from the GLOBAL ~/.codex/config.toml, where init
+  // registers `[mcp_servers.summon-agents]` - so without this a codex worker
+  // would recursively boot summon-agents' own MCP and hang (the same footgun that
+  // bit `claude -p`). `-c mcp_servers.summon-agents.enabled=false` disables just
+  // that server for the run (the "disable all" form `-c mcp_servers={}` is a known
+  // codex no-op). EXPERIMENTAL: codex is not verified here - confirm on a machine
+  // with the codex CLI that this override is honored.
   codex: {
     bin: "codex",
     runArgs: (prompt) => [
       "exec",
       prompt,
       "--dangerously-bypass-approvals-and-sandbox",
+      "-c",
+      "mcp_servers.summon-agents.enabled=false",
     ],
     // EXPERIMENTAL: interactive TUI seeded with the prompt (no `exec`).
-    interactiveArgs: (prompt) => [prompt],
+    interactiveArgs: (prompt) => [
+      prompt,
+      "-c",
+      "mcp_servers.summon-agents.enabled=false",
+    ],
     versionArgs: ["--version"],
   },
 };

@@ -80,14 +80,27 @@ describe("agentRunArgs (per-vendor headless flags)", () => {
     expect(agentRunArgs(cfg, "hi")).toEqual(["-p", "hi", "--force"]);
   });
 
-  it("copilot uses --allow-all-tools", () => {
+  it("copilot uses --allow-all-tools and drops built-in MCPs", () => {
     const cfg = { vendor: "copilot" as const, bin: "copilot", permissionMode: "bypassPermissions", skipPermissions: false };
-    expect(agentRunArgs(cfg, "hi")).toEqual(["-p", "hi", "--allow-all-tools"]);
+    expect(agentRunArgs(cfg, "hi")).toEqual([
+      "-p",
+      "hi",
+      "--allow-all-tools",
+      "--disable-builtin-mcps",
+    ]);
   });
 
-  it("codex uses `exec` with the bypass flag", () => {
+  it("codex uses `exec` with the bypass flag and disables the summon MCP server", () => {
     const cfg = { vendor: "codex" as const, bin: "codex", permissionMode: "bypassPermissions", skipPermissions: false };
-    expect(agentRunArgs(cfg, "hi")).toEqual(["exec", "hi", "--dangerously-bypass-approvals-and-sandbox"]);
+    // Codex reads MCP from the global config.toml; disable summon-agents there so
+    // the worker doesn't recursively boot our own MCP.
+    expect(agentRunArgs(cfg, "hi")).toEqual([
+      "exec",
+      "hi",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "-c",
+      "mcp_servers.summon-agents.enabled=false",
+    ]);
   });
 });
 
@@ -111,15 +124,15 @@ describe("agentInteractiveArgs (per-vendor interactive/attended flags)", () => {
   it("copilot seeds the prompt + --allow-all-tools, no headless -p", () => {
     const cfg = { vendor: "copilot" as const, bin: "copilot", permissionMode: "bypassPermissions", skipPermissions: false };
     const args = agentInteractiveArgs(cfg, "hi");
-    expect(args).toEqual(["hi", "--allow-all-tools"]);
+    expect(args).toEqual(["hi", "--allow-all-tools", "--disable-builtin-mcps"]);
     expect(args).toContain("--allow-all-tools");
     expect(args).not.toContain("-p");
   });
 
-  it("codex seeds the prompt, no `exec`", () => {
+  it("codex seeds the prompt (no `exec`) and disables the summon MCP server", () => {
     const cfg = { vendor: "codex" as const, bin: "codex", permissionMode: "bypassPermissions", skipPermissions: false };
     const args = agentInteractiveArgs(cfg, "hi");
-    expect(args).toEqual(["hi"]);
+    expect(args).toEqual(["hi", "-c", "mcp_servers.summon-agents.enabled=false"]);
     expect(args).toContain("hi");
     expect(args).not.toContain("exec");
   });

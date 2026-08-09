@@ -43,7 +43,7 @@ const program = new Command();
 program
   .name("summon-agents")
   .description("Zero-setup orchestrator for parallel AI coding agents")
-  .version("0.9.3");
+  .version("0.9.4");
 
 program
   .command("run")
