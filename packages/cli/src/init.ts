@@ -22,12 +22,16 @@ import * as path from "node:path";
  * Cursor, and Copilot - and forbids implementing inline (which is what raced
  * summon-agents in the live test).
  */
-export const TRIGGER_BODY = `The user wants to execute the current approved implementation plan using summon-agents - parallel, isolated agents - and NOT by implementing it yourself.
+export const TRIGGER_BODY = `The user wants to execute an approved implementation plan using summon-agents - parallel, isolated agents - and NOT by implementing it yourself.
 
 Do exactly this:
-1. Call the \`summon_agents\` tool (provided by the summon-agents MCP server), passing the full text of the most recently approved plan as the \`plan\` argument. If no plan has been approved yet, stop and ask the user to plan first.
-2. Do NOT implement the plan yourself, and do NOT edit project files. summon_agents creates an isolated git worktree per task, runs an agent in each, merges them back locally (gated on a clean, validated merge), and opens a PR (or reports a manual PR command if there is no remote).
-3. Relay the tool's final report to the user verbatim.`;
+1. Identify WHICH plan to dispatch, in this priority order:
+   a. If the user gave plan text with this command (or a pointer like "the plan above" / "the plan we just wrote"), use THAT.
+   b. Otherwise use the plan the user most recently approved IN THIS CONVERSATION - the plan you just presented and they accepted. Use the conversation's plan, NOT a plan file on disk, unless the user explicitly points you to a file. (A stale plan file is the #1 cause of dispatching the wrong thing.)
+   c. If you cannot identify a single, current plan with confidence, STOP and ask the user which plan to dispatch.
+2. BEFORE calling the tool, show the user the exact plan you are about to dispatch - a one-line summary plus the concrete files/tasks it will create - and ask them to confirm. Do NOT call the tool until they confirm. This one check prevents dispatching a stale or wrong plan and wasting a full run.
+3. Once confirmed, call the \`summon_agents\` tool (provided by the summon-agents MCP server) with that plan as the \`plan\` argument. Do NOT implement the plan yourself, and do NOT edit project files. summon_agents creates an isolated git worktree per task, runs an agent in each, merges them back locally (gated on a clean, validated merge), and opens a PR (or reports a manual PR command if there is no remote).
+4. Relay the tool's final report to the user verbatim.`;
 
 export interface HostFile {
   path: string;

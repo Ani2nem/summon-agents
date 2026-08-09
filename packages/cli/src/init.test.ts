@@ -18,6 +18,15 @@ describe("shared trigger body (vendor-agnostic)", () => {
     expect(TRIGGER_BODY).toMatch(/do not implement the plan yourself/i);
   });
 
+  it("prefers the conversation's plan over a stale file, and confirms before dispatching", () => {
+    // Prefer the just-approved conversation plan, not a stale plan file.
+    expect(TRIGGER_BODY).toMatch(/in this conversation/i);
+    expect(TRIGGER_BODY).toMatch(/not a plan file|stale plan file/i);
+    // Echo + confirm before calling the tool (catches dispatching the wrong plan).
+    expect(TRIGGER_BODY).toMatch(/confirm/i);
+    expect(TRIGGER_BODY).toMatch(/before .*call|do not call the tool until/i);
+  });
+
   it("every host wraps the SAME body (only format differs)", () => {
     for (const f of [
       claudeCommandFile,

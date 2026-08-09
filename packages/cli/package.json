@@ -1,6 +1,6 @@
 {
   "name": "summon-agents",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "Turn one approved plan into a team of AI coding agents that build it in parallel, in isolated git worktrees, from inside your editor.",
   "type": "module",
   "bin": {
